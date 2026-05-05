@@ -27,15 +27,27 @@ const DIMENSION_PALETTE = {
 const DIMENSION_FALLBACK = { fg: '#475569', tint: '#f1f5f9', dot: '#64748b' };
 const dimensionStyle = (dim) => DIMENSION_PALETTE[dim] || DIMENSION_FALLBACK;
 
-function MetricCard({ label, value }) {
+function MetricCard({ label, value, denominator, hint }) {
   return (
     <Paper sx={{ p: 2.5, textAlign: 'center', borderRadius: 2.5 }}>
       <Typography variant="caption" sx={{
         color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 500,
       }}>{label}</Typography>
-      <Typography sx={{ fontSize: '1.8rem', fontWeight: 700, color: 'primary.main', mt: 0.75 }}>
+      <Typography sx={{ fontSize: '1.8rem', fontWeight: 700, color: 'primary.main', mt: 0.75, lineHeight: 1.1 }}>
         {value}
+        {denominator !== undefined && (
+          <Typography component="span" sx={{
+            fontSize: '1.05rem', fontWeight: 500, color: 'text.secondary', ml: 0.5,
+          }}>
+            / {denominator}
+          </Typography>
+        )}
       </Typography>
+      {hint && (
+        <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block', mt: 0.25 }}>
+          {hint}
+        </Typography>
+      )}
     </Paper>
   );
 }
@@ -199,7 +211,14 @@ AZURE_OPENAI_MAX_RPM=60`}
           <Grid container spacing={2} sx={{ mb: 2 }}>
             <Grid item xs={4}><MetricCard label="Total Rules" value={stats.total_rules} /></Grid>
             <Grid item xs={4}><MetricCard label="Columns Covered" value={stats.columns_covered} /></Grid>
-            <Grid item xs={4}><MetricCard label="DQ Dimensions" value={stats.dq_dimensions} /></Grid>
+            <Grid item xs={4}>
+              <MetricCard
+                label="DQ Dimensions"
+                value={stats.dq_dimensions}
+                denominator={6}
+                hint="of 6 standard dimensions used"
+              />
+            </Grid>
           </Grid>
 
           <Divider sx={{ my: 2 }} />
