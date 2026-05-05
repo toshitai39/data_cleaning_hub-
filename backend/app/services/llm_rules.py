@@ -22,6 +22,28 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+ALLOWED_DIMENSIONS = ("Accuracy", "Completeness", "Consistency", "Validity", "Uniqueness", "Timeliness")
+
+
+def _normalize_dimension(value: Any) -> str:
+    """Coerce any LLM-returned dimension into one of the six allowed dimensions."""
+    raw = str(value or "").strip()
+    if not raw:
+        return "Validity"
+    for d in ALLOWED_DIMENSIONS:
+        if raw.lower() == d.lower():
+            return d
+    legacy = {
+        "conformity": "Validity",
+        "character length": "Validity",
+        "integrity": "Consistency",
+        "reliability": "Accuracy",
+        "relevance": "Accuracy",
+        "precision": "Accuracy",
+        "accessibility": "Validity",
+    }
+    return legacy.get(raw.lower(), "Validity")
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _SECRETS_PATH = _PROJECT_ROOT / ".streamlit" / "secrets.toml"
 
@@ -157,7 +179,7 @@ Return ONLY valid JSON, no markdown, with this exact structure:
   "business_field_name": "Human-friendly field name",
   "rules": [
     {{
-      "dimension": "One of: Accuracy, Completeness, Consistency, Validity, Uniqueness, Timeliness, Integrity, Conformity, Reliability, Relevance, Precision, Accessibility, Character Length",
+      "dimension": "MUST be exactly one of these six values (case-sensitive): Accuracy, Completeness, Consistency, Validity, Uniqueness, Timeliness. Do NOT use any other dimension name.",
       "rule_statement": "Human readable rule in format: [Field Name] + Must/Should + Business Condition",
       "regex": "Optional regex pattern that values must match, or null"
     }}
@@ -171,7 +193,8 @@ REQUIREMENTS
 3. ALWAYS include a Uniqueness rule if the column looks like an ID/UID/key.
 4. If sample values look like emails, phones, dates, IDs — include a Validity rule with a regex.
 5. Use exact format: [Field Name] + Must/Should + Business Condition.
-6. No markdown. No commentary. JSON only.
+6. The "dimension" field MUST be one of exactly these six values: Accuracy, Completeness, Consistency, Validity, Uniqueness, Timeliness. Format/length/case rules belong under Validity. Reject any output that uses a different dimension name.
+7. No markdown. No commentary. JSON only.
 """
 
 
@@ -238,7 +261,7 @@ def _heuristic_rules(name: str, series: pd.Series) -> List[Dict[str, Any]]:
         else:
             max_len = int(s.str.len().max())
             rules.append({
-                "column": name, "dimension": "Conformity",
+                "column": name, "dimension": "Validity",
                 "rule": f"{name} must not exceed {max_len} characters",
                 "regex": None,
                 "examples": s.head(3).tolist(),
@@ -307,7 +330,7 @@ def generate_rules_for_dataframe(df: pd.DataFrame, columns: Optional[List[str]] 
                     for r in parsed["rules"]:
                         col_rules.append({
                             "column": col,
-                            "dimension": r.get("dimension", "Validity"),
+                            "dimension": _normalize_dimension(r.get("dimension")),
                             "rule": r.get("rule_statement") or r.get("rule") or "",
                             "regex": r.get("regex") or None,
                             "examples": samples[:3],

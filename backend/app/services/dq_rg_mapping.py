@@ -45,12 +45,12 @@ def rg_row_to_applied_rule(row: pd.Series) -> Optional[Dict[str, Any]]:
 
     if pat:
         return _base(name=f"RG · {dim}: {dq[:48]}", mode="Validate", pattern=pat)
-    if dim == "Conformity" and ("uppercase" in dl or "upper case" in dl):
+    if "uppercase" in dl or "upper case" in dl:
         return _base(name=f"RG · Case: {dq[:48]}", mode="Case", pattern="", case="UPPERCASE")
-    if dim == "Conformity" and ("lowercase" in dl or "lower case" in dl):
+    if "lowercase" in dl or "lower case" in dl:
         return _base(name=f"RG · Case: {dq[:48]}", mode="Case", pattern="", case="lowercase")
     mc = _extract_max_chars(dq)
-    if dim == "Character Length" and mc is not None:
+    if mc is not None:
         return _base(
             name=f"RG · Length ≤ {mc}", mode="Length", pattern="",
             length_mode="Maximum", max_length=int(mc),

@@ -181,84 +181,97 @@ def _ensure_regex_pattern(rule: Dict[str, Any], metadata: Dict[str, Any]) -> Non
     if existing:
         return
     dim = rule.get("dimension", "")
-    if dim == "Character Length" and metadata.get("max_length") is not None:
+    rule_text = str(rule.get("data_quality_rule", "")).lower()
+    if dim == "Validity" and "character" in rule_text and metadata.get("max_length") is not None:
         n = int(metadata["max_length"])
         rule["regex_pattern"] = f"^.{0,{n}}$"
 
 
+_ALLOWED_DIMENSIONS = ("Accuracy", "Completeness", "Consistency", "Validity", "Uniqueness", "Timeliness")
+_LEGACY_DIMENSION_MAP = {
+    "conformity": "Validity",
+    "character length": "Validity",
+    "integrity": "Consistency",
+    "reliability": "Accuracy",
+    "relevance": "Accuracy",
+    "precision": "Accuracy",
+    "accessibility": "Validity",
+}
+
+
+def _normalize_dimension(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "Validity"
+    for d in _ALLOWED_DIMENSIONS:
+        if raw.lower() == d.lower():
+            return d
+    return _LEGACY_DIMENSION_MAP.get(raw.lower(), "Validity")
+
+
 def post_process_rules(rules: List[Dict[str, Any]], metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Post-process generated rules to ensure correct dimension mapping and formatting
-    
+    """Post-process generated rules to ensure correct dimension mapping and formatting.
+
     Applies these transformations:
-    1. Reclassify any VARCHAR/CHAR/CHARACTER rules to 'Character Length' dimension
-    2. Ensure human-readable formatting for length constraints
-    3. Ensure Completeness rules exist for mandatory fields
-    4. Ensure separate line items for each dimension
-    5. Fill ``regex_pattern`` when inferable from metadata
+    1. Coerce every dimension into one of the six standard DQ dimensions
+       (Accuracy, Completeness, Consistency, Validity, Uniqueness, Timeliness).
+    2. Length / format / pattern rules are kept under Validity.
+    3. Ensure human-readable formatting for length constraints.
+    4. Ensure a Completeness rule exists for mandatory fields.
+    5. Fill ``regex_pattern`` when inferable from metadata.
     """
-    processed_rules = []
+    processed_rules: List[Dict[str, Any]] = []
     has_completeness_rule = False
-    has_character_length_rule = False
-    
+    has_length_rule = False
+
+    char_keywords = ['CHAR', 'CHARACTER', 'VARCHAR', 'VARCHAR2', 'STRING', 'TEXT',
+                     'maximum', 'max length', 'characters', 'character length']
+
     for rule in rules:
-        dimension = rule.get('dimension', '')
+        rule['dimension'] = _normalize_dimension(rule.get('dimension'))
         rule_text = rule.get('data_quality_rule', '')
-        
-        # Check if this is a character length rule based on keywords
-        char_keywords = ['CHAR', 'CHARACTER', 'VARCHAR', 'VARCHAR2', 'STRING', 'TEXT', 
-                        'maximum', 'max length', 'characters', 'character length']
-        
-        is_length_rule = any(keyword.lower() in rule_text.lower() for keyword in char_keywords)
-        
-        # Reclassify to Character Length if it contains length-related keywords
+
+        is_length_rule = any(k.lower() in rule_text.lower() for k in char_keywords)
+
         if is_length_rule and 'character' in rule_text.lower():
-            rule['dimension'] = 'Character Length'
-            has_character_length_rule = True
-            
-            # Ensure proper formatting: "should be maximum X characters"
+            rule['dimension'] = 'Validity'
+            has_length_rule = True
             if metadata.get('max_length'):
                 field_name = rule.get('business_field', '')
                 rule['data_quality_rule'] = f"{field_name} should be maximum {metadata['max_length']} characters"
-        
-        # Check if this is a completeness rule
-        if dimension == 'Completeness' or 'must not be blank' in rule_text.lower():
+
+        if rule['dimension'] == 'Completeness' or 'must not be blank' in rule_text.lower():
             has_completeness_rule = True
-            
-            # Ensure proper formatting: "must not be blank"
             if 'must not be blank' not in rule_text.lower():
                 field_name = rule.get('business_field', '')
                 rule['data_quality_rule'] = f"{field_name} must not be blank"
-        
+
         _ensure_regex_pattern(rule, metadata)
         processed_rules.append(rule)
-    
-    # Ensure Completeness rule exists for mandatory fields
+
     if metadata.get('mandatory') and not has_completeness_rule:
         field_name = processed_rules[0].get('business_field', '') if processed_rules else ''
-        completeness_rule = {
+        processed_rules.append({
             'business_field': field_name,
             'dimension': 'Completeness',
             'data_quality_rule': f"{field_name} must not be blank",
             'issues_found': 0,
             'issues_found_example': 'All values valid - No issues found',
             'regex_pattern': '',
-        }
-        processed_rules.append(completeness_rule)
-    
-    # Ensure Character Length rule exists if max_length is detected
-    if metadata.get('max_length') and not has_character_length_rule:
+        })
+
+    if metadata.get('max_length') and not has_length_rule:
         field_name = processed_rules[0].get('business_field', '') if processed_rules else ''
         n = int(metadata['max_length'])
-        char_length_rule = {
+        processed_rules.append({
             'business_field': field_name,
-            'dimension': 'Character Length',
+            'dimension': 'Validity',
             'data_quality_rule': f"{field_name} should be maximum {metadata['max_length']} characters",
             'issues_found': 0,
             'issues_found_example': 'All values valid - No issues found',
-            'regex_pattern': f'^.{0,{n}}$',
-        }
-        processed_rules.append(char_length_rule)
-    
+            'regex_pattern': f'^.{{0,{n}}}$',
+        })
+
     return processed_rules
 
 
@@ -559,33 +572,35 @@ Date Patterns:
 
 === DIMENSION CLASSIFICATION (CRITICAL RULES) ===
 
-**MANDATORY DIMENSION MAPPING:**
+**STRICT POLICY: Only the SIX standard data-quality dimensions are allowed.**
+Every rule MUST use exactly one of these dimension names — no others, no
+variations, no legacy labels:
 
-1. **Character Length** - Use for ANY string length constraint containing these keywords:
-   - CHAR, CHARACTER, VARCHAR, VARCHAR2, STRING, TEXT
-   - "max length", "maximum characters", "length constraint"
-   - Example: VARCHAR2(30) → Dimension = "Character Length"
-   - Example: CHAR(19) → Dimension = "Character Length"
-   - IMPORTANT: Even if traditionally "Conformity", these MUST be "Character Length"
-
-2. **Completeness** - Use for mandatory/required fields:
-   - Fields marked with * (asterisk)
-   - Keywords: mandatory, required, not null, must not be blank
+1. **Completeness** - Mandatory/required fields:
+   - Fields marked with * (asterisk), keywords: mandatory, required, not null
    - Rule format: "[Field Name] must not be blank"
 
-3. **Validity** - Use for data type and format validation:
-   - "must be numeric", "must be date", "must be valid email"
-   - Data type checks, format pattern validation
+2. **Validity** - Data type, format, length, pattern, and case constraints:
+   - Type checks: "must be numeric", "must be date", "must be valid email"
+   - Length: VARCHAR2(30) → "[Field] should be maximum 30 characters"
+   - Format/case: UPPERCASE / lowercase / alphanumeric / regex patterns
+   - DO NOT use "Character Length" or "Conformity" — those go under Validity.
 
-4. **Uniqueness** - Use for unique constraints:
+3. **Uniqueness** - Unique constraints:
    - unique, distinct, no duplicates, primary key
 
-5. **Conformity** - Use for format restrictions (NOT length):
-   - UPPERCASE, lowercase, alphanumeric only
-   - Specific patterns, regex validation
+4. **Accuracy** - Value-level correctness:
+   - Value ranges, decimal precision, scale, lookups, business correctness
 
-6. **Accuracy** - Use for value ranges and precision:
-   - Value ranges, decimal precision, scale
+5. **Consistency** - Cross-field / cross-record agreement:
+   - Same value in related columns, referential consistency, sums tie out
+
+6. **Timeliness** - Date freshness / sequencing:
+   - Date <= today, end_date >= start_date, freshness windows
+
+DO NOT emit any other dimension name (no Conformity, Character Length,
+Integrity, Reliability, Relevance, Precision, Accessibility, etc.).
+Length and case rules → Validity. Reference data correctness → Accuracy.
 
 === HUMAN-READABLE RULE FORMATTING ===
 
@@ -603,22 +618,22 @@ Technical Input → Human-Readable Output:
 Write rules in this format: [Field Name] + must/should + condition
 
 Examples:
-- "Account Name should be maximum 30 characters" (Character Length)
+- "Account Name should be maximum 30 characters" (Validity)
 - "Account Name must not be blank" (Completeness)
 - "Interface Line Number must be numeric" (Validity)
 - "Date Placed in Service must be in YYYY/MM/DD date format" (Validity)
-- "Asset Type should be maximum 11 characters" (Character Length)
+- "Asset Type should be maximum 11 characters" (Validity)
 
 === IMPORTANT GUIDELINES ===
 
-1. **For Character Length dimension**: ALWAYS use "should be maximum X characters"
-2. **For Completeness dimension**: ALWAYS use "must not be blank" for mandatory fields
-3. **For Validity dimension**: Use "must be numeric" or "must be in [format]"
-4. **For Uniqueness**: Use "must be unique"
+1. **For length / format / pattern rules** (Validity): use "should be maximum X characters" / "must be numeric" / "must be in [format]"
+2. **For Completeness**: ALWAYS use "must not be blank" for mandatory fields
+3. **For Uniqueness**: Use "must be unique"
+4. The "dimension" field MUST be one of exactly: Accuracy, Completeness, Consistency, Validity, Uniqueness, Timeliness.
 
 5. Generate SEPARATE rules for each dimension:
    - If field has VARCHAR2(30) AND is mandatory → Generate TWO rules:
-     * Rule 1: Dimension = "Character Length", Rule = "[Field] should be maximum 30 characters"
+     * Rule 1: Dimension = "Validity",     Rule = "[Field] should be maximum 30 characters"
      * Rule 2: Dimension = "Completeness", Rule = "[Field] must not be blank"
 
 6. PRIORITY: For every mandatory field, ALWAYS generate a Completeness rule
@@ -638,7 +653,7 @@ implements the check when applicable (e.g. "^.{{0,30}}$" for max 30 characters,
   "rules": [
     {{
       "business_field": "{column_name}",
-      "dimension": "Character Length",
+      "dimension": "Validity",
       "data_quality_rule": "{column_name} should be maximum X characters",
       "regex_pattern": "^.{{0,X}}$",
       "issues_found": 0,
@@ -913,7 +928,7 @@ Return a JSON object with this EXACT structure:
   "conditional_rule": "Any conditional logic (or null)",
   "rules": [
     {{
-      "dimension": "One of: Accuracy, Completeness, Consistency, Validity, Uniqueness, Timeliness, Integrity, Conformity, Reliability, Relevance, Precision, Accessibility",
+      "dimension": "MUST be exactly one of: Accuracy, Completeness, Consistency, Validity, Uniqueness, Timeliness — and nothing else",
       "rule_statement": "Human readable rule: [Field Name] + Must/Should + Business Condition"
     }}
   ]
@@ -1178,9 +1193,9 @@ def validate_rule(df: pd.DataFrame, column: str, dimension: str, rule_text: str)
             return count, f"{count} blank/null values found"
         return 0, "All values valid - No issues found"
 
-    # ── Character Length ──────────────────────────────────────────────────
+    # ── Length / Validity (max-character) ─────────────────────────────────
     max_chars = _extract_max_chars(rule_text)
-    if max_chars or dimension == "Character Length":
+    if max_chars or dimension == "Character Length" or "character" in rule_lower and "maximum" in rule_lower:
         if max_chars:
             non_null = col.dropna().astype(str)
             too_long = non_null[non_null.str.len() > max_chars]
