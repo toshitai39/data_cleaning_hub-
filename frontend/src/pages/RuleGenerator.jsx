@@ -147,15 +147,14 @@ export default function RuleGenerator() {
           Azure OpenAI not configured. Missing: {(llm.missing || []).join(', ')}
         </Alert>
         <Alert severity="info" sx={{ mt: 1 }}>
-          Please set these in your secrets file <code>.streamlit/secrets.toml</code>:
+          Add these to a <code>.env</code> file in the project root (it is gitignored — never committed):
         </Alert>
         <Paper sx={{ mt: 2, p: 2, fontFamily: 'monospace', fontSize: '0.85rem' }}>
-{`[default]
-AZURE_OPENAI_ENDPOINT = "https://your-resource.openai.azure.com/"
-AZURE_OPENAI_KEY = "your-api-key"
-AZURE_OPENAI_DEPLOYMENT = "gpt-4o-mini"
-AZURE_OPENAI_API_VERSION = "2024-12-01-preview"
-AZURE_OPENAI_MAX_RPM = 60`}
+{`AZURE_OPENAI_ENDPOINT="https://your-resource.openai.azure.com/"
+AZURE_OPENAI_KEY="your-api-key"
+AZURE_OPENAI_DEPLOYMENT="gpt-4o-mini"
+AZURE_OPENAI_API_VERSION="2025-01-01-preview"
+AZURE_OPENAI_MAX_RPM=60`}
         </Paper>
       </>
     );

@@ -1,7 +1,11 @@
-"""Azure OpenAI configuration ported 1:1 from features/profiling/ui.py.
+"""Azure OpenAI configuration.
 
-Streamlit's `st.secrets` is replaced with .streamlit/secrets.toml file parsing
-and environment variable fallback. Same field names, same defaults.
+Loads credentials from (in priority order):
+  1. Real environment variables (e.g. set in CI/CD or shell)
+  2. .env file in the project root (gitignored — safe for local dev)
+  3. Legacy .streamlit/secrets.toml (backward compat)
+
+Never hardcode credentials here.  Put them in .env (see .env.example).
 """
 from __future__ import annotations
 
@@ -11,13 +15,19 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from dotenv import load_dotenv
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+# Load .env once at import time (no-op if file is absent)
+load_dotenv(_PROJECT_ROOT / ".env", override=False)
+
 _SECRETS_PATH = _PROJECT_ROOT / ".streamlit" / "secrets.toml"
 
 
 @lru_cache(maxsize=1)
 def _read_secrets() -> Dict[str, str]:
+    """Legacy: read .streamlit/secrets.toml as a flat key=value file."""
     if not _SECRETS_PATH.exists():
         return {}
     out: Dict[str, str] = {}
@@ -27,7 +37,7 @@ def _read_secrets() -> Dict[str, str]:
         return {}
     for line in text.splitlines():
         line = line.strip()
-        if not line or line.startswith("#"):
+        if not line or line.startswith("#") or line.startswith("["):
             continue
         m = re.match(r'([A-Za-z0-9_]+)\s*=\s*"([^"]*)"', line)
         if m:
@@ -40,19 +50,18 @@ def _read_secrets() -> Dict[str, str]:
 
 
 def _get(key: str, default: Optional[str] = None) -> Optional[str]:
+    # os.environ already has .env values merged by load_dotenv above
     return os.environ.get(key) or _read_secrets().get(key) or default
 
 
 class AzureOpenAIConfig:
-    """Mirror of features/profiling/ui.py AzureOpenAIConfig (lines 45-67)."""
-
-    AZURE_OPENAI_ENDPOINT = _get("AZURE_OPENAI_ENDPOINT")
-    AZURE_OPENAI_KEY = _get("AZURE_OPENAI_KEY")
+    AZURE_OPENAI_ENDPOINT   = _get("AZURE_OPENAI_ENDPOINT")
+    AZURE_OPENAI_KEY        = _get("AZURE_OPENAI_KEY")
     AZURE_OPENAI_DEPLOYMENT = _get("AZURE_OPENAI_DEPLOYMENT")
-    AZURE_OPENAI_API_VERSION = _get("AZURE_OPENAI_API_VERSION")
+    AZURE_OPENAI_API_VERSION = _get("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
 
     MAX_REQUESTS_PER_MINUTE = int(_get("AZURE_OPENAI_MAX_RPM", "60") or 60)
-    MAX_TOKENS_PER_MINUTE = int(_get("AZURE_OPENAI_MAX_TPM", "40000") or 40000)
+    MAX_TOKENS_PER_MINUTE   = int(_get("AZURE_OPENAI_MAX_TPM", "40000") or 40000)
 
     @classmethod
     def validate(cls) -> List[str]:
