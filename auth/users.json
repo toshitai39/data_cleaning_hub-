@@ -19,6 +19,16 @@
       "username": "vineeth",
       "password": "4bf9777e1c195cc0f4d04c1bb45a7d07a63664bc267c0cf97bd8c55ce0dca4fb",
       "name": "Vineeth Kumar"
+    },
+    {
+      "username": "demo",
+      "password": "e373bab7e368f6a4c16a7d24a80e7d4fa8b68e4b7118277b2b1dc16b2c330d31",
+      "name": "Demo User"
+    },
+    {
+      "username": "toshit",
+      "password": "3a85a152642933ec939a13b4b6b5678c374addd23efd4c095bb64f2075baaa91",
+      "name": "toshit"
     }
   ]
 }

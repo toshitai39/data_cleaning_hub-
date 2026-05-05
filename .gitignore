@@ -25,3 +25,15 @@ ENV/
 *.swp
 *.swo
 .cursor/
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+.vite/
+
+# Claude Code
+.claude/
+
+# Backend storage / sessions
+backend/storage/
+backend/__pycache__/
