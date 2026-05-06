@@ -15,14 +15,15 @@ import PageHeader from '../components/PageHeader.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import { useDataset } from '../context/DatasetContext.jsx';
 
-// Six standard DQ dimensions — single muted palette, no clashing pastels.
+// Seven DQ dimensions — single muted palette, no clashing pastels.
 const DIMENSION_PALETTE = {
-  Accuracy:     { fg: '#1e3a8a', tint: '#eef2ff', dot: '#3b82f6' },
-  Completeness: { fg: '#14532d', tint: '#f0fdf4', dot: '#16a34a' },
-  Consistency:  { fg: '#713f12', tint: '#fefce8', dot: '#ca8a04' },
-  Validity:     { fg: '#581c87', tint: '#faf5ff', dot: '#9333ea' },
-  Uniqueness:   { fg: '#0c4a6e', tint: '#f0f9ff', dot: '#0284c7' },
-  Timeliness:   { fg: '#134e4a', tint: '#f0fdfa', dot: '#0d9488' },
+  Accuracy:                  { fg: '#1e3a8a', tint: '#eef2ff', dot: '#3b82f6' },
+  Completeness:              { fg: '#14532d', tint: '#f0fdf4', dot: '#16a34a' },
+  Consistency:               { fg: '#713f12', tint: '#fefce8', dot: '#ca8a04' },
+  Validity:                  { fg: '#581c87', tint: '#faf5ff', dot: '#9333ea' },
+  Uniqueness:                { fg: '#0c4a6e', tint: '#f0f9ff', dot: '#0284c7' },
+  Timeliness:                { fg: '#134e4a', tint: '#f0fdfa', dot: '#0d9488' },
+  'Cross-field Validation':  { fg: '#7c2d12', tint: '#fff7ed', dot: '#ea580c' },
 };
 const DIMENSION_FALLBACK = { fg: '#475569', tint: '#f1f5f9', dot: '#64748b' };
 const dimensionStyle = (dim) => DIMENSION_PALETTE[dim] || DIMENSION_FALLBACK;
@@ -215,8 +216,8 @@ AZURE_OPENAI_MAX_RPM=60`}
               <MetricCard
                 label="DQ Dimensions"
                 value={stats.dq_dimensions}
-                denominator={6}
-                hint="of 6 standard dimensions used"
+                denominator={7}
+                hint="of 7 standard dimensions used"
               />
             </Grid>
           </Grid>

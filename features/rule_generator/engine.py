@@ -187,7 +187,10 @@ def _ensure_regex_pattern(rule: Dict[str, Any], metadata: Dict[str, Any]) -> Non
         rule["regex_pattern"] = f"^.{0,{n}}$"
 
 
-_ALLOWED_DIMENSIONS = ("Accuracy", "Completeness", "Consistency", "Validity", "Uniqueness", "Timeliness")
+_ALLOWED_DIMENSIONS = (
+    "Accuracy", "Completeness", "Consistency", "Validity", "Uniqueness",
+    "Timeliness", "Cross-field Validation",
+)
 _LEGACY_DIMENSION_MAP = {
     "conformity": "Validity",
     "character length": "Validity",
@@ -789,20 +792,29 @@ Return ONLY valid JSON, no markdown."""
 
 def generate_comprehensive_ai_prompt(column_name: str, sample_data: List[str], data_type: str,
                                      null_pct: float, unique_pct: float,
-                                     metadata: Dict[str, Any], rule_source: str = None) -> str:
+                                     metadata: Dict[str, Any], rule_source: str = None,
+                                     all_columns: Optional[List[str]] = None) -> str:
     """Build a deterministic data-quality prompt for one column.
 
     Design choices to keep output stable across runs:
       - Sample list is already sorted+deduped upstream; we render it the same
         way every time.
-      - Output schema is fixed: exactly three rules, fixed key names, fixed
+      - Output schema is fixed: exactly seven rules, fixed key names, fixed
         dimension whitelist, no optional fields.
       - One worked example shows the exact JSON shape; we do not list dozens
         of free-form examples that invite drift.
+
+    The ``all_columns`` argument lets the model propose a Cross-field
+    Validation rule referencing sibling columns when relevant.
     """
 
     samples = sample_data[:50] if sample_data else []
     sample_str = json.dumps(samples, ensure_ascii=False)
+    sibling_columns = sorted(c for c in (all_columns or []) if c != column_name)
+    sibling_block = (
+        json.dumps(sibling_columns, ensure_ascii=False)
+        if sibling_columns else "(this column is the only column in the dataset)"
+    )
 
     metadata_lines: List[str] = []
     if metadata:
@@ -837,16 +849,21 @@ def generate_comprehensive_ai_prompt(column_name: str, sample_data: List[str], d
     )
 
     prompt = f"""You are a data-quality rule engine. For the column described
-below, output exactly six data-quality rules as JSON — one rule per
-dimension — covering the standard six DQ dimensions.
+below, output exactly seven data-quality rules as JSON — one rule per
+dimension — covering the seven DQ dimensions including Cross-field
+Validation across sibling columns.
 
-COLUMN
-------
+COLUMN UNDER REVIEW
+-------------------
 Name: {column_name}
 Pandas dtype: {data_type}
 Null %: {null_pct:.1f}
 Unique %: {unique_pct:.1f}
 Distinct sample values (sorted, max 50): {sample_str}
+
+OTHER COLUMNS IN THE SAME DATASET (sorted)
+------------------------------------------
+{sibling_block}
 
 EXTRACTED METADATA
 ------------------
@@ -871,61 +888,81 @@ DIMENSION DEFINITIONS (use these definitions verbatim)
   column is an identifier. For clearly non-identifier columns (categorical,
   low-cardinality, free text), emit:
   "<Field>: duplicates are allowed for this non-identifier field".
+- Cross-field Validation: a constraint that involves THIS column AND one
+  or more OTHER columns from the sibling list above. Examples:
+    * uniqueness across a tuple ("name + country + entity_type must be
+      unique together")
+    * conditional presence ("vat_no must be present when country is in EU")
+    * referential consistency ("currency must match the locale implied by
+      country")
+    * arithmetic ("net_amount + tax_amount must equal gross_amount")
+  Pick siblings ONLY from the OTHER COLUMNS list. Do not invent column
+  names. If no plausible cross-field constraint exists for this column,
+  emit: "<Field>: no cross-field constraint identified".
 
 INSTRUCTIONS
 ------------
-1. Emit exactly six rules — one per dimension — in the order listed in the
-   schema below. Do not skip a dimension. If a dimension does not apply,
-   use the "not applicable" phrasing shown in the definitions above.
+1. Emit exactly seven rules — one per dimension — in the order listed in
+   the schema below. Do not skip a dimension. If a dimension does not
+   apply, use the "not applicable" phrasing shown in the definitions.
 2. Rule wording: "<Field> must <verb> <condition>" (one concise sentence).
-   The "not applicable" rules are the only exception.
+   The "not applicable" / "no cross-field constraint" rules are the only
+   exceptions.
 3. Use evidence-based limits. If metadata supplies a max_length, allowed
    values, or a regex, use that exactly — do not invent thresholds.
-4. The dimension field MUST be spelled EXACTLY as listed in the schema:
-   Accuracy, Completeness, Consistency, Timeliness, Validity, Uniqueness.
-5. Return ONLY a JSON object — no prose, no markdown fence.
+4. For Cross-field Validation: reference at least one sibling column by
+   its EXACT name from the OTHER COLUMNS list. Do not invent columns.
+5. The dimension field MUST be spelled EXACTLY as listed in the schema:
+   Accuracy, Completeness, Consistency, Timeliness, Validity, Uniqueness,
+   Cross-field Validation.
+6. Return ONLY a JSON object — no prose, no markdown fence.
 
 OUTPUT SCHEMA (return exactly these keys, in this order)
 --------------------------------------------------------
 {{
   "business_field": "<human-readable field name, derived from column name>",
   "rules": [
-    {{ "dimension": "Accuracy",     "data_quality_rule": "<one sentence>" }},
-    {{ "dimension": "Completeness", "data_quality_rule": "<one sentence>" }},
-    {{ "dimension": "Consistency",  "data_quality_rule": "<one sentence>" }},
-    {{ "dimension": "Timeliness",   "data_quality_rule": "<one sentence>" }},
-    {{ "dimension": "Validity",     "data_quality_rule": "<one sentence>" }},
-    {{ "dimension": "Uniqueness",   "data_quality_rule": "<one sentence>" }}
+    {{ "dimension": "Accuracy",                "data_quality_rule": "<one sentence>" }},
+    {{ "dimension": "Completeness",            "data_quality_rule": "<one sentence>" }},
+    {{ "dimension": "Consistency",             "data_quality_rule": "<one sentence>" }},
+    {{ "dimension": "Timeliness",              "data_quality_rule": "<one sentence>" }},
+    {{ "dimension": "Validity",                "data_quality_rule": "<one sentence>" }},
+    {{ "dimension": "Uniqueness",              "data_quality_rule": "<one sentence>" }},
+    {{ "dimension": "Cross-field Validation",  "data_quality_rule": "<one sentence>" }}
   ]
 }}
 
-WORKED EXAMPLE
---------------
-For a column "Email Address *" with metadata {{mandatory: YES}}:
+WORKED EXAMPLE 1
+----------------
+Column "name" with siblings ["country", "entity_type", "pan_number", "vat_no"]:
 
 {{
-  "business_field": "Email Address",
+  "business_field": "Name",
   "rules": [
-    {{ "dimension": "Accuracy",     "data_quality_rule": "Email Address must correspond to a deliverable mailbox for the associated person" }},
-    {{ "dimension": "Completeness", "data_quality_rule": "Email Address must not be blank" }},
-    {{ "dimension": "Consistency",  "data_quality_rule": "Email Address must be stored in lowercase with no surrounding whitespace" }},
-    {{ "dimension": "Timeliness",   "data_quality_rule": "Email Address: timeliness is not applicable for non-date fields" }},
-    {{ "dimension": "Validity",     "data_quality_rule": "Email Address must follow standard email format (local@domain.tld)" }},
-    {{ "dimension": "Uniqueness",   "data_quality_rule": "Email Address must be unique across all records" }}
+    {{ "dimension": "Accuracy",                "data_quality_rule": "Name must match the legal or registered name of the underlying entity" }},
+    {{ "dimension": "Completeness",            "data_quality_rule": "Name must not be blank" }},
+    {{ "dimension": "Consistency",             "data_quality_rule": "Name must use a single casing convention with no leading or trailing whitespace" }},
+    {{ "dimension": "Timeliness",              "data_quality_rule": "Name: timeliness is not applicable for non-date fields" }},
+    {{ "dimension": "Validity",                "data_quality_rule": "Name must contain only letters, spaces, hyphens, apostrophes, and periods" }},
+    {{ "dimension": "Uniqueness",              "data_quality_rule": "Name: duplicates are allowed for this non-identifier field" }},
+    {{ "dimension": "Cross-field Validation",  "data_quality_rule": "name + country + entity_type must be unique together to avoid duplicate customer records" }}
   ]
 }}
 
-For a column "Created Date":
+WORKED EXAMPLE 2
+----------------
+Column "vat_no" with siblings ["country", "name", "entity_type"]:
 
 {{
-  "business_field": "Created Date",
+  "business_field": "VAT Number",
   "rules": [
-    {{ "dimension": "Accuracy",     "data_quality_rule": "Created Date must reflect the actual moment the record was created" }},
-    {{ "dimension": "Completeness", "data_quality_rule": "Created Date must not be blank" }},
-    {{ "dimension": "Consistency",  "data_quality_rule": "Created Date must be stored in a single ISO 8601 format across all rows" }},
-    {{ "dimension": "Timeliness",   "data_quality_rule": "Created Date must not be in the future and must be within the last 10 years" }},
-    {{ "dimension": "Validity",     "data_quality_rule": "Created Date must be a parseable date in YYYY-MM-DD format" }},
-    {{ "dimension": "Uniqueness",   "data_quality_rule": "Created Date: duplicates are allowed for this non-identifier field" }}
+    {{ "dimension": "Accuracy",                "data_quality_rule": "VAT Number must correspond to an active VAT registration with the issuing authority" }},
+    {{ "dimension": "Completeness",            "data_quality_rule": "VAT Number must not be blank when the entity is VAT-registered" }},
+    {{ "dimension": "Consistency",             "data_quality_rule": "VAT Number must be stored in uppercase with no spaces or punctuation" }},
+    {{ "dimension": "Timeliness",              "data_quality_rule": "VAT Number: timeliness is not applicable for non-date fields" }},
+    {{ "dimension": "Validity",                "data_quality_rule": "VAT Number must be alphanumeric with length between 8 and 14 characters" }},
+    {{ "dimension": "Uniqueness",              "data_quality_rule": "VAT Number must be unique across all records" }},
+    {{ "dimension": "Cross-field Validation",  "data_quality_rule": "vat_no must follow the format prescribed by country (e.g. country prefix matches the country code)" }}
   ]
 }}
 """

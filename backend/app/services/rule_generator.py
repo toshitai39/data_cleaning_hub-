@@ -64,6 +64,7 @@ def generate_rules_with_comprehensive_engine(
 
     all_rules: List[Dict[str, Any]] = []
     total_cols = len(df.columns)
+    all_column_names = [str(c) for c in df.columns]
 
     for idx, column_name in enumerate(df.columns):
         try:
@@ -95,6 +96,7 @@ def generate_rules_with_comprehensive_engine(
                 unique_pct=unique_pct,
                 metadata=metadata,
                 rule_source=rule_source,
+                all_columns=all_column_names,
             )
 
             # temperature=0 + fixed seed + json_object response_format pin the
