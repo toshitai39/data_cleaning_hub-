@@ -10,6 +10,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import DownloadIcon from '@mui/icons-material/Download';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import api from '../api.js';
 import PageHeader from '../components/PageHeader.jsx';
 import EmptyState from '../components/EmptyState.jsx';
@@ -275,6 +276,7 @@ AZURE_OPENAI_MAX_RPM=60`}
                 {rules.map((r, i) => {
                   const issues = Number(r['Issues Found']) || 0;
                   const example = String(r['Issues Found Example'] || '');
+                  const isCrossField = r.Dimension === 'Cross-field Validation';
                   const isOk = !example || example.startsWith('All values valid');
                   const dim = dimensionStyle(r.Dimension);
                   const src = sourceChipProps(r['Rule Source']);
@@ -347,25 +349,31 @@ AZURE_OPENAI_MAX_RPM=60`}
                       <TableCell align="right" sx={{
                         fontVariantNumeric: 'tabular-nums',
                         fontWeight: 600,
-                        color: issues > 0 ? 'error.main' : 'text.disabled',
+                        color: isCrossField
+                          ? 'text.disabled'
+                          : issues > 0 ? 'error.main' : 'text.disabled',
                       }}>
-                        {issues}
+                        {isCrossField ? '—' : issues}
                       </TableCell>
                       <TableCell sx={{ minWidth: 260, maxWidth: 360 }}>
                         <Stack direction="row" spacing={0.75} alignItems="flex-start">
-                          {isOk ? (
+                          {isCrossField ? (
+                            <InfoOutlinedIcon sx={{ fontSize: 16, color: 'info.main', mt: '3px', flexShrink: 0 }} />
+                          ) : isOk ? (
                             <CheckCircleOutlineIcon sx={{ fontSize: 16, color: 'success.main', mt: '3px', flexShrink: 0 }} />
                           ) : (
                             <ErrorOutlineIcon sx={{ fontSize: 16, color: 'warning.main', mt: '3px', flexShrink: 0 }} />
                           )}
                           <Typography variant="body2" sx={{
-                            color: isOk ? 'text.secondary' : 'text.primary',
+                            color: isCrossField ? 'text.secondary' : isOk ? 'text.secondary' : 'text.primary',
                             fontSize: '0.8rem',
                             lineHeight: 1.5,
                             overflowWrap: 'anywhere',
                             wordBreak: 'normal',
                           }}>
-                            {isOk ? 'All values valid' : example}
+                            {isCrossField
+                              ? 'Cross-field — manual review'
+                              : isOk ? 'All values valid' : example}
                           </Typography>
                         </Stack>
                       </TableCell>

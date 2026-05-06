@@ -1182,10 +1182,14 @@ def enrich_dataframe_regex_patterns(df: pd.DataFrame) -> pd.DataFrame:
     if "Regex Pattern" not in out.columns:
         out["Regex Pattern"] = ""
     for idx in out.index:
+        dim = str(out.at[idx, "Dimension"]).strip()
+        # Cross-field rules involve multiple columns; a single-column
+        # regex is meaningless for them.
+        if dim == "Cross-field Validation":
+            continue
         cur = out.at[idx, "Regex Pattern"]
         if pd.notna(cur) and str(cur).strip() != "":
             continue
-        dim = str(out.at[idx, "Dimension"])
         rule = str(out.at[idx, "Data Quality Rule"])
         inferred = infer_regex_pattern_from_rule(dim, rule)
         if inferred:
@@ -1424,6 +1428,10 @@ def validate_all_rules(df: pd.DataFrame, rules_df: pd.DataFrame) -> pd.DataFrame
 
     Returns a copy of *rules_df* with ``Issues Found`` and
     ``Issues Found Example`` populated from actual data checks.
+
+    Cross-field rules are not auto-evaluated — they involve multiple
+    columns and are too open-ended for the single-column interpreter
+    below. They are flagged for manual review instead.
     """
     result = rules_df.copy()
 
@@ -1431,6 +1439,11 @@ def validate_all_rules(df: pd.DataFrame, rules_df: pd.DataFrame) -> pd.DataFrame
         column = result.at[idx, "Column"]
         dimension = result.at[idx, "Dimension"]
         rule_text = result.at[idx, "Data Quality Rule"]
+
+        if str(dimension).strip() == "Cross-field Validation":
+            result.at[idx, "Issues Found"] = 0
+            result.at[idx, "Issues Found Example"] = "Cross-field — manual review"
+            continue
 
         try:
             count, example = validate_rule(df, column, dimension, rule_text)
