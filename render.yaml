@@ -32,7 +32,6 @@ services:
   - type: web
     name: data-cleaning-hub-web
     runtime: static
-    plan: free
     buildCommand: cd frontend && npm install && npm run build
     staticPublishPath: frontend/dist
     pullRequestPreviewsEnabled: false
