@@ -793,7 +793,8 @@ Return ONLY valid JSON, no markdown."""
 def generate_comprehensive_ai_prompt(column_name: str, sample_data: List[str], data_type: str,
                                      null_pct: float, unique_pct: float,
                                      metadata: Dict[str, Any], rule_source: str = None,
-                                     all_columns: Optional[List[str]] = None) -> str:
+                                     all_columns: Optional[List[str]] = None,
+                                     sibling_samples: Optional[Dict[str, List[str]]] = None) -> str:
     """Build a deterministic data-quality prompt for one column.
 
     Design choices to keep output stable across runs:
@@ -801,20 +802,30 @@ def generate_comprehensive_ai_prompt(column_name: str, sample_data: List[str], d
         way every time.
       - Output schema is fixed: exactly seven rules, fixed key names, fixed
         dimension whitelist, no optional fields.
-      - One worked example shows the exact JSON shape; we do not list dozens
-        of free-form examples that invite drift.
+      - Worked examples show expert-grade rules (fuzzy thresholds,
+        conditional presence, prefix-from-sibling) so the model has the
+        right shape to imitate, not generic equality.
 
-    The ``all_columns`` argument lets the model propose a Cross-field
-    Validation rule referencing sibling columns when relevant.
+    ``all_columns`` supplies the sibling list for Cross-field Validation.
+    ``sibling_samples`` supplies up to 5 sample values for each sibling so
+    the model can ground cross-field rules in the actual data shape (e.g.
+    notice that ``country`` has values like ``["DE", "FR", "GB"]``).
     """
 
     samples = sample_data[:50] if sample_data else []
     sample_str = json.dumps(samples, ensure_ascii=False)
     sibling_columns = sorted(c for c in (all_columns or []) if c != column_name)
-    sibling_block = (
-        json.dumps(sibling_columns, ensure_ascii=False)
-        if sibling_columns else "(this column is the only column in the dataset)"
-    )
+    if sibling_columns and sibling_samples:
+        sibling_lines = []
+        for name in sibling_columns:
+            preview = sibling_samples.get(name, [])
+            preview_str = json.dumps(preview[:5], ensure_ascii=False)
+            sibling_lines.append(f"- {name}: {preview_str}")
+        sibling_block = "\n".join(sibling_lines)
+    elif sibling_columns:
+        sibling_block = "\n".join(f"- {c}" for c in sibling_columns)
+    else:
+        sibling_block = "(this column is the only column in the dataset)"
 
     metadata_lines: List[str] = []
     if metadata:
@@ -861,8 +872,8 @@ Null %: {null_pct:.1f}
 Unique %: {unique_pct:.1f}
 Distinct sample values (sorted, max 50): {sample_str}
 
-OTHER COLUMNS IN THE SAME DATASET (sorted)
-------------------------------------------
+OTHER COLUMNS IN THE SAME DATASET (with up to 5 sample values each)
+-------------------------------------------------------------------
 {sibling_block}
 
 EXTRACTED METADATA
@@ -889,16 +900,25 @@ DIMENSION DEFINITIONS (use these definitions verbatim)
   low-cardinality, free text), emit:
   "<Field>: duplicates are allowed for this non-identifier field".
 - Cross-field Validation: a constraint that involves THIS column AND one
-  or more OTHER columns from the sibling list above. Examples:
-    * uniqueness across a tuple ("name + country + entity_type must be
-      unique together")
-    * conditional presence ("vat_no must be present when country is in EU")
-    * referential consistency ("currency must match the locale implied by
-      country")
-    * arithmetic ("net_amount + tax_amount must equal gross_amount")
+  or more OTHER columns from the sibling list above. Inspect sibling sample
+  values to ground the rule in the actual data shape, not generic equality.
+  Strong cross-field rules include:
+    * Fuzzy/normalized composite uniqueness with a threshold:
+      "Flag probable duplicate when normalized name fuzzy match is ≥85%
+       and country and entity_type match exactly"
+    * Conditional presence keyed off another column's value:
+      "vat_no must be present when country is in [DE, FR, IT, ES, NL]"
+    * Prefix / format derived from a sibling:
+      "vat_no must start with the 2-letter country code stored in country"
+    * Cross-field arithmetic: "net + tax must equal gross within 0.01"
+    * Referential consistency: "currency must match the locale implied by
+      country (e.g. country=DE → currency=EUR)"
   Pick siblings ONLY from the OTHER COLUMNS list. Do not invent column
-  names. If no plausible cross-field constraint exists for this column,
-  emit: "<Field>: no cross-field constraint identified".
+  names. Prefer rules that use sibling SAMPLE VALUES you can see above —
+  do not write generic "<col_a> + <col_b> must be unique together" if you
+  can write a more specific rule. If no plausible cross-field constraint
+  exists for this column, emit: "<Field>: no cross-field constraint
+  identified".
 
 INSTRUCTIONS
 ------------
@@ -932,37 +952,63 @@ OUTPUT SCHEMA (return exactly these keys, in this order)
   ]
 }}
 
-WORKED EXAMPLE 1
-----------------
-Column "name" with siblings ["country", "entity_type", "pan_number", "vat_no"]:
+WORKED EXAMPLE 1 — entity name with composite fuzzy duplicate detection
+-----------------------------------------------------------------------
+Column "name" with siblings:
+- country: ["DE", "FR", "GB", "IN", "US"]
+- entity_type: ["Corporation", "LLC", "Partnership"]
+- pan_number: ["AAAPL1234C", "AAACN1234A"]
 
 {{
   "business_field": "Name",
   "rules": [
-    {{ "dimension": "Accuracy",                "data_quality_rule": "Name must match the legal or registered name of the underlying entity" }},
+    {{ "dimension": "Accuracy",                "data_quality_rule": "Name must match the legal or registered name on file with the issuing authority" }},
     {{ "dimension": "Completeness",            "data_quality_rule": "Name must not be blank" }},
-    {{ "dimension": "Consistency",             "data_quality_rule": "Name must use a single casing convention with no leading or trailing whitespace" }},
+    {{ "dimension": "Consistency",             "data_quality_rule": "Name must be stored with consistent casing and trimmed of leading or trailing whitespace" }},
     {{ "dimension": "Timeliness",              "data_quality_rule": "Name: timeliness is not applicable for non-date fields" }},
-    {{ "dimension": "Validity",                "data_quality_rule": "Name must contain only letters, spaces, hyphens, apostrophes, and periods" }},
+    {{ "dimension": "Validity",                "data_quality_rule": "Name must contain only letters, digits, spaces, hyphens, apostrophes, ampersands, and periods" }},
     {{ "dimension": "Uniqueness",              "data_quality_rule": "Name: duplicates are allowed for this non-identifier field" }},
-    {{ "dimension": "Cross-field Validation",  "data_quality_rule": "name + country + entity_type must be unique together to avoid duplicate customer records" }}
+    {{ "dimension": "Cross-field Validation",  "data_quality_rule": "Flag probable duplicate when normalized name fuzzy match is at least 85% and country and entity_type match exactly" }}
   ]
 }}
 
-WORKED EXAMPLE 2
-----------------
-Column "vat_no" with siblings ["country", "name", "entity_type"]:
+WORKED EXAMPLE 2 — VAT number derived from country
+--------------------------------------------------
+Column "vat_no" with siblings:
+- country: ["DE", "FR", "IT", "GB", "NL"]
+- name: ["Acme GmbH", "Brico SARL"]
+- entity_type: ["Corporation", "LLC"]
 
 {{
   "business_field": "VAT Number",
   "rules": [
-    {{ "dimension": "Accuracy",                "data_quality_rule": "VAT Number must correspond to an active VAT registration with the issuing authority" }},
-    {{ "dimension": "Completeness",            "data_quality_rule": "VAT Number must not be blank when the entity is VAT-registered" }},
-    {{ "dimension": "Consistency",             "data_quality_rule": "VAT Number must be stored in uppercase with no spaces or punctuation" }},
+    {{ "dimension": "Accuracy",                "data_quality_rule": "VAT Number must correspond to an active VAT registration with the issuing tax authority" }},
+    {{ "dimension": "Completeness",            "data_quality_rule": "VAT Number must be present when country is in the EU member-state list" }},
+    {{ "dimension": "Consistency",             "data_quality_rule": "VAT Number must be stored in uppercase with no spaces, hyphens, or punctuation" }},
     {{ "dimension": "Timeliness",              "data_quality_rule": "VAT Number: timeliness is not applicable for non-date fields" }},
-    {{ "dimension": "Validity",                "data_quality_rule": "VAT Number must be alphanumeric with length between 8 and 14 characters" }},
-    {{ "dimension": "Uniqueness",              "data_quality_rule": "VAT Number must be unique across all records" }},
-    {{ "dimension": "Cross-field Validation",  "data_quality_rule": "vat_no must follow the format prescribed by country (e.g. country prefix matches the country code)" }}
+    {{ "dimension": "Validity",                "data_quality_rule": "VAT Number must be alphanumeric with length between 8 and 14 characters after normalization" }},
+    {{ "dimension": "Uniqueness",              "data_quality_rule": "VAT Number must be unique across all records once normalized" }},
+    {{ "dimension": "Cross-field Validation",  "data_quality_rule": "vat_no must start with the 2-letter ISO code stored in country (e.g. country=DE → vat_no starts with DE)" }}
+  ]
+}}
+
+WORKED EXAMPLE 3 — amount tied to currency and tax columns
+----------------------------------------------------------
+Column "gross_amount" with siblings:
+- net_amount: ["100.00", "250.00"]
+- tax_amount: ["18.00", "45.00"]
+- currency: ["INR", "USD", "EUR"]
+
+{{
+  "business_field": "Gross Amount",
+  "rules": [
+    {{ "dimension": "Accuracy",                "data_quality_rule": "Gross Amount must equal the actual invoiced total for the transaction" }},
+    {{ "dimension": "Completeness",            "data_quality_rule": "Gross Amount must not be blank" }},
+    {{ "dimension": "Consistency",             "data_quality_rule": "Gross Amount must be stored as a number with exactly two decimal places" }},
+    {{ "dimension": "Timeliness",              "data_quality_rule": "Gross Amount: timeliness is not applicable for non-date fields" }},
+    {{ "dimension": "Validity",                "data_quality_rule": "Gross Amount must be a non-negative number with at most two decimal places" }},
+    {{ "dimension": "Uniqueness",              "data_quality_rule": "Gross Amount: duplicates are allowed for this non-identifier field" }},
+    {{ "dimension": "Cross-field Validation",  "data_quality_rule": "gross_amount must equal net_amount + tax_amount within a tolerance of 0.01 in the same currency" }}
   ]
 }}
 """
