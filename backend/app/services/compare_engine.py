@@ -51,13 +51,27 @@ def stats(orig_df: pd.DataFrame, curr_df: pd.DataFrame) -> Dict[str, Any]:
 
 
 def _safe(v: Any) -> Any:
-    """JSON-safe scalar: NaN/NaT → None."""
+    """JSON-safe scalar.
+
+    Handles three classes of value that FastAPI's default encoder rejects:
+      - NaN / NaT / None (any nullable kind) → ``None``.
+      - numpy scalars (np.int64, np.float64, np.bool_, etc.) → Python scalars.
+      - pandas Timestamp / Timedelta → ISO 8601 string.
+    Everything else passes through.
+    """
     if v is None:
         return None
-    if isinstance(v, float) and np.isnan(v):
-        return None
-    if v is pd.NaT:
-        return None
+    # pd.isna handles float('nan'), np.nan, pd.NA, pd.NaT — but only for
+    # scalar-shaped values, so guard against arrays/lists.
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(v, (pd.Timestamp, pd.Timedelta)):
+        return v.isoformat()
+    if isinstance(v, np.generic):
+        return v.item()
     return v
 
 
