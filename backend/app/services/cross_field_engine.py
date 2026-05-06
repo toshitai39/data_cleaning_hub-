@@ -375,28 +375,37 @@ def evaluate_cross_field_rule(
     all_columns = [str(c) for c in df.columns]
     candidates = _detect_columns_in_text(rule_text, all_columns)
 
-    # If we couldn't even find two columns mentioned, the rule isn't
-    # actually cross-field. Bail to manual review.
-    if len(candidates) < 2:
+    # Bail only when the rule mentions zero real columns — there is
+    # nothing for the LLM to ground against. A single column is enough:
+    # the cross-field bucket sometimes catches what are really
+    # single-column rules (year validity, format check), and the LLM
+    # translator can express those just fine.
+    if len(candidates) < 1:
         return CrossFieldResult(
             family="manual",
             count=0,
-            example="Cross-field — manual review (could not identify involved columns)",
+            example="Cross-field — manual review (no recognisable columns in rule text)",
             expression="",
             columns=candidates,
         )
 
-    for parser in _FAMILY_PARSERS:
-        try:
-            result = parser(rule_text, df, candidates)
-        except Exception as exc:  # pragma: no cover  (defensive)
-            logger.warning("Family parser %s raised on rule %r: %s",
-                           parser.__name__, rule_text[:60], exc)
-            continue
-        if result is not None:
-            return result
+    # Mechanical family parsers are inherently multi-column; only run
+    # them when we have 2+ candidates.
+    if len(candidates) >= 2:
+        for parser in _FAMILY_PARSERS:
+            try:
+                result = parser(rule_text, df, candidates)
+            except Exception as exc:  # pragma: no cover  (defensive)
+                logger.warning("Family parser %s raised on rule %r: %s",
+                               parser.__name__, rule_text[:60], exc)
+                continue
+            if result is not None:
+                return result
 
-    # Family classification declined. Try the LLM translator if provided.
+    # No mechanical family matched (or only one column was named). Try
+    # the LLM translator — it can handle both single-column and
+    # multi-column rules, regex format checks, range checks, conditional
+    # value lookups, etc.
     if llm_translator is not None:
         try:
             translated = llm_translator(rule_text, all_columns)
@@ -579,52 +588,108 @@ def _run_llm_expression(
 # Azure OpenAI translator factory
 # ─────────────────────────────────────────────────────────────────────────
 
-_LLM_TRANSLATOR_PROMPT = """You translate a single English data-quality
-rule into a pandas boolean-mask expression. The expression marks the
-FAILING rows (True = the row violates the rule).
+_LLM_TRANSLATOR_PROMPT = """You translate one English data-quality rule
+into a pandas boolean-mask expression. The expression marks the FAILING
+rows (True = the row violates the rule).
 
-The expression must:
-  - Be a single Python expression — not a statement, not multiple lines.
-  - Reference only the names ``df``, ``pd``, and ``np``.
-  - Return a pandas Series of booleans with length ``len(df)``.
-  - Use only standard pandas / numpy operations (no imports, no IO, no
-    lambdas, no eval, no dunder access).
+CONSTRAINTS
+-----------
+The expression MUST:
+  - Be a single Python expression (one line, no statements).
+  - Reference only the names df, pd, np, and the builtins str, int,
+    float, bool, len, abs.
+  - Return a pandas Series of booleans with length len(df).
+  - Use vectorised pandas operations. No lambdas, no imports, no IO,
+    no eval, no dunder access (anything starting with __ is rejected).
 
-Return JSON exactly matching this schema:
+USE THESE IDIOMS — they cover almost every rule
+-----------------------------------------------
+  Regex format:         df['c'].astype(str).str.match(r'^...$', na=False)
+  Date comparison:      pd.to_datetime(df['a'], errors='coerce') > pd.to_datetime(df['b'], errors='coerce')
+  Current year:         pd.Timestamp.now().year
+  Numeric range:        ~pd.to_numeric(df['c'], errors='coerce').between(lo, hi)
+  Inline lookup:        df['country'].astype(str).str.upper().map({'DE':'EUR','US':'USD'}) != df['currency']
+  Membership:           ~df['c'].isin(['A', 'B', 'C'])
+  Composite condition:  (cond_a) & ~(cond_b)        (use & | ~, NOT and/or/not)
+
+DEFAULT TO TRANSLATING — do not bail
+------------------------------------
+Rules that look like they need external data USUALLY do not. For each of
+these patterns, encode the rule directly:
+
+  - "X must follow the format specific to <country>" → use the country's
+    standard regex (PAN: ^[A-Z]{5}[0-9]{4}[A-Z]$, Aadhaar: ^[0-9]{12}$,
+    SSN: ^[0-9]{3}-[0-9]{2}-[0-9]{4}$, US ZIP: ^[0-9]{5}(-[0-9]{4})?$).
+
+  - "Y must match the locale of <country>" → write an inline .map() with
+    the small set of values the dataset uses. Example below.
+
+  - "X must be a valid year" → compare against
+    pd.Timestamp.now().year.
+
+  - "X must be a valid email/phone/URL" → standard regex.
+
+  - Single-column validity rules ("X must be alphanumeric", "X must be
+    positive", "X must be no longer than N chars") — translate them
+    even if the rule was filed under cross-field by mistake.
+
+ONLY return empty code when the rule references concepts truly outside
+the table AND outside common standards (e.g. "this column must equal
+the customer's account balance from the CRM").
+
+OUTPUT FORMAT
+-------------
+Return JSON exactly:
 {
   "code": "<single-line pandas expression returning a bool Series>",
-  "description": "<short human-readable description of what is checked>"
+  "description": "<short description of what is checked>"
 }
 
-If the rule cannot be expressed safely (e.g. it requires an external
-lookup, fuzzy matching unavailable in pandas, or data not in the table),
-return:
-{ "code": "", "description": "<reason>" }
+If — and only if — the rule cannot be expressed:
+{ "code": "", "description": "<short reason>" }
 
 EXAMPLES
 --------
 Rule: "gross_amount must equal net_amount + tax_amount within 0.01"
 Columns: [gross_amount, net_amount, tax_amount, currency]
-Output:
 {
   "code": "(df['gross_amount'] - df['net_amount'] - df['tax_amount']).abs() > 0.01",
-  "description": "gross_amount within 0.01 of net_amount + tax_amount"
-}
-
-Rule: "currency must match the locale implied by country"
-Columns: [country, currency, name]
-Output:
-{
-  "code": "",
-  "description": "Requires external country-to-currency lookup table"
+  "description": "gross_amount differs from net + tax by more than 0.01"
 }
 
 Rule: "discharge_date must be on or after admission_date"
 Columns: [admission_date, discharge_date, patient_id]
-Output:
 {
   "code": "pd.to_datetime(df['discharge_date'], errors='coerce') < pd.to_datetime(df['admission_date'], errors='coerce')",
   "description": "discharge_date is before admission_date"
+}
+
+Rule: "pan_number must follow the format specific to India when country is 'INDIA'"
+Columns: [pan_number, country, name]
+{
+  "code": "(df['country'].astype(str).str.upper().str.strip() == 'INDIA') & ~df['pan_number'].astype(str).str.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', na=False)",
+  "description": "pan_number does not match Indian PAN format when country is INDIA"
+}
+
+Rule: "year_of_establishment must be a valid year and not greater than the current year"
+Columns: [year_of_establishment]
+{
+  "code": "(pd.to_numeric(df['year_of_establishment'], errors='coerce') < 1800) | (pd.to_numeric(df['year_of_establishment'], errors='coerce') > pd.Timestamp.now().year)",
+  "description": "year_of_establishment is outside the valid range [1800, current year]"
+}
+
+Rule: "currency must match the locale implied by country"
+Columns: [country, currency]
+{
+  "code": "df['country'].astype(str).str.upper().str.strip().map({'DE':'EUR','FR':'EUR','IT':'EUR','ES':'EUR','NL':'EUR','BE':'EUR','AT':'EUR','PT':'EUR','GR':'EUR','GB':'GBP','US':'USD','IN':'INR','CN':'CNY','JP':'JPY','CA':'CAD','AU':'AUD','CH':'CHF'}).fillna(df['currency']) != df['currency']",
+  "description": "currency does not match the country's typical currency"
+}
+
+Rule: "company_type must be consistent with entity_type, e.g. entity_type='BUYER' implies company_type in ['LIMITED_LIABILITY_PARTNERSHIP','LLC','LLP']"
+Columns: [company_type, entity_type]
+{
+  "code": "(df['entity_type'].astype(str).str.upper().str.strip() == 'BUYER') & ~df['company_type'].astype(str).str.upper().str.strip().isin(['LIMITED_LIABILITY_PARTNERSHIP','LLC','LLP'])",
+  "description": "company_type not in {LLP, LLC, LIMITED_LIABILITY_PARTNERSHIP} when entity_type=BUYER"
 }
 
 NOW TRANSLATE
