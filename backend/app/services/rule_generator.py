@@ -88,9 +88,9 @@ def generate_rules_with_comprehensive_engine(
 
     progress_lock = threading.Lock()
     completed = {"n": 0}
-    # Two passes per column (per-column rules + cross-field), so the
-    # progress denominator is 2× total_cols.
-    progress_total = 2 * total_cols
+    # One per-column call per column + a single whole-dataset cross-field
+    # call. Progress denominator is total_cols + 1.
+    progress_total = total_cols + 1
 
     def _llm_json(prompt: str) -> Dict[str, Any]:
         """Single deterministic LLM call returning a parsed JSON object."""
@@ -153,71 +153,73 @@ def generate_rules_with_comprehensive_engine(
         finally:
             _bump_progress(column_name)
 
-    # ───── Pass 2: cross-field rules (one focused call per column) ──────
+    # ───── Pass 2: whole-dataset cross-field call (one LLM call total) ──
+    #
+    # Cross-field rules belong to combinations of columns, not to a single
+    # column, so the model does better thinking top-down about the whole
+    # table than column-by-column. One call, sees every column + samples,
+    # returns 0–10 rules each tagged with the columns they involve.
     valid_column_set = set(all_column_names)
 
-    def _run_cross_field(column_name: str) -> Dict[str, Any]:
-        siblings = sibling_samples_by_col[str(column_name)]
-        if not siblings:
-            _bump_progress(column_name)
-            return {"column": column_name, "rules": [], "error": None}
-
-        prompt = generate_cross_field_prompt(
-            target_column=str(column_name),
-            target_samples=column_samples[str(column_name)],
-            target_dtype=str(df[column_name].dtype),
-            sibling_samples=siblings,
-        )
+    def _run_cross_field_table() -> List[Dict[str, Any]]:
+        prompt = generate_cross_field_prompt(column_samples=column_samples)
         try:
             result = _llm_json(prompt)
             raw_rules = result.get("rules", []) if isinstance(result, dict) else []
             cleaned: List[Dict[str, Any]] = []
             for r in raw_rules:
-                refs = r.get("siblings_referenced") or []
                 rule_text = str(r.get("data_quality_rule", "")).strip()
-                if not rule_text:
+                cols = r.get("columns") or []
+                if not rule_text or len(cols) < 2:
                     continue
-                # Drop hallucinated siblings: every referenced sibling must
-                # exist in the dataset. If any reference is invalid, drop
-                # the rule rather than emit a half-truth.
-                if not refs or not all(s in valid_column_set for s in refs):
-                    # Fallback: try to recover by finding which real columns
-                    # the rule text actually mentions. If at least one is
-                    # found, keep the rule; otherwise drop it.
-                    mentioned = [c for c in valid_column_set
-                                 if c != column_name and c in rule_text]
-                    if not mentioned:
+                # Drop hallucinated columns. Every column in the rule's
+                # ``columns`` list must exist in the dataset. If any do not,
+                # try to recover by scanning the rule text for real column
+                # names — keep only if at least two real columns are found.
+                if not all(c in valid_column_set for c in cols):
+                    mentioned = [c for c in valid_column_set if c in rule_text]
+                    if len(mentioned) < 2:
                         continue
+                    cols = mentioned
                 cleaned.append({
-                    "dimension": "Cross-field Validation",
                     "data_quality_rule": rule_text,
+                    "columns": list(cols),
                 })
-            return {"column": column_name, "rules": cleaned, "error": None}
+            return cleaned
         except Exception as exc:
-            logger.error("Cross-field LLM error for '%s': %s", column_name, exc)
-            return {"column": column_name, "rules": [], "error": str(exc)}
+            logger.error("Cross-field LLM error (whole-dataset pass): %s", exc)
+            return []
         finally:
-            _bump_progress(column_name)
+            _bump_progress("(cross-field pass)")
 
-    # Bound the worker count: enough to amortize LLM latency, not so many
-    # that we breach the Azure RPM cap. 8 workers × ~3s/call ≈ 22 calls
-    # per minute — well under the 60 RPM default.
+    # Bound the worker count: enough to amortize per-column LLM latency,
+    # not so many that we breach the Azure RPM cap. 8 workers × ~3s/call
+    # ≈ 22 calls per minute — well under the 60 RPM default. The cross-
+    # field call runs in the same pool so it overlaps with per-column work.
     max_workers = min(8, max(1, total_cols))
     per_column_results: Dict[str, Dict[str, Any]] = {}
-    cross_field_results: Dict[str, Dict[str, Any]] = {}
+    cross_field_rules: List[Dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         per_futs = {pool.submit(_run_per_column, c): c for c in df.columns}
-        cross_futs = {pool.submit(_run_cross_field, c): c for c in df.columns}
+        cross_fut = pool.submit(_run_cross_field_table)
         for fut in as_completed(per_futs):
             r = fut.result()
             per_column_results[r["column"]] = r
-        for fut in as_completed(cross_futs):
-            r = fut.result()
-            cross_field_results[r["column"]] = r
+        cross_field_rules = cross_fut.result()
+
+    # Group cross-field rules by their primary (first) column so each
+    # rule appears as a row attached to that column.
+    cross_field_by_primary: Dict[str, List[Dict[str, Any]]] = {}
+    for rule in cross_field_rules:
+        primary = rule["columns"][0]
+        cross_field_by_primary.setdefault(primary, []).append(rule)
 
     # Re-emit rules in df.columns order so S.No is deterministic and not
-    # dependent on which thread happened to finish first. For each column
-    # the per-column rules come first, then any cross-field rules.
+    # dependent on which thread happened to finish first. Per-column
+    # rules first, then any cross-field rules whose primary column is
+    # this one. The Column field for a cross-field row uses the joined
+    # tuple (e.g. "name + country + entity_type") so the table mirrors
+    # the customer-rule sheet shape.
     all_rules: List[Dict[str, Any]] = []
     for column_name in df.columns:
         res = per_column_results.get(column_name)
@@ -248,20 +250,19 @@ def generate_rules_with_comprehensive_engine(
                 "Issues Found": rule.get("issues_found", 0),
                 "Issues Found Example": rule.get("issues_found_example", "All values valid - No issues found"),
             })
-        cf = cross_field_results.get(column_name)
-        if cf:
-            for rule in cf["rules"]:
-                all_rules.append({
-                    "S.No": len(all_rules) + 1,
-                    "Column": column_name,
-                    "Business Field": column_name,
-                    "Rule Source": "Generated by AI",
-                    "Dimension": "Cross-field Validation",
-                    "Data Quality Rule": rule["data_quality_rule"],
-                    "Regex Pattern": "",
-                    "Issues Found": 0,
-                    "Issues Found Example": "All values valid - No issues found",
-                })
+        for cf in cross_field_by_primary.get(str(column_name), []):
+            tuple_label = " + ".join(cf["columns"])
+            all_rules.append({
+                "S.No": len(all_rules) + 1,
+                "Column": tuple_label,
+                "Business Field": tuple_label,
+                "Rule Source": "Generated by AI",
+                "Dimension": "Cross-field Validation",
+                "Data Quality Rule": cf["data_quality_rule"],
+                "Regex Pattern": "",
+                "Issues Found": 0,
+                "Issues Found Example": "All values valid - No issues found",
+            })
 
     return pd.DataFrame(all_rules)
 
