@@ -59,7 +59,7 @@ export default function Sidebar() {
       <Box
         sx={{
           background: UNIQUS.gradient,
-          borderRadius: 3,
+          borderRadius: 0,
           p: 2.5,
           color: 'white',
           textAlign: 'center',

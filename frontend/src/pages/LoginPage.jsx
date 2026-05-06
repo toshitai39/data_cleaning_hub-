@@ -165,7 +165,7 @@ export default function LoginPage() {
           <Box
             sx={{
               background: UNIQUS.gradient,
-              borderRadius: 3,
+              borderRadius: 0,
               px: 4,
               py: 2.5,
               width: '100%',

@@ -234,7 +234,6 @@ AZURE_OPENAI_MAX_RPM=60`}
             sx={{
               maxHeight: 700,
               borderRadius: 2,
-              overflow: 'hidden',
               border: '1px solid',
               borderColor: 'divider',
               boxShadow: 'none',
@@ -268,7 +267,7 @@ AZURE_OPENAI_MAX_RPM=60`}
                   <TableCell>Data Quality Rule</TableCell>
                   <TableCell>Regex Pattern</TableCell>
                   <TableCell align="right" sx={{ width: 90 }}>Issues</TableCell>
-                  <TableCell>Result</TableCell>
+                  <TableCell sx={{ minWidth: 260 }}>Result</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -351,17 +350,19 @@ AZURE_OPENAI_MAX_RPM=60`}
                       }}>
                         {issues}
                       </TableCell>
-                      <TableCell sx={{ maxWidth: 360 }}>
+                      <TableCell sx={{ minWidth: 260, maxWidth: 360 }}>
                         <Stack direction="row" spacing={0.75} alignItems="flex-start">
                           {isOk ? (
-                            <CheckCircleOutlineIcon sx={{ fontSize: 16, color: 'success.main', mt: '2px' }} />
+                            <CheckCircleOutlineIcon sx={{ fontSize: 16, color: 'success.main', mt: '3px', flexShrink: 0 }} />
                           ) : (
-                            <ErrorOutlineIcon sx={{ fontSize: 16, color: 'warning.main', mt: '2px' }} />
+                            <ErrorOutlineIcon sx={{ fontSize: 16, color: 'warning.main', mt: '3px', flexShrink: 0 }} />
                           )}
                           <Typography variant="body2" sx={{
                             color: isOk ? 'text.secondary' : 'text.primary',
                             fontSize: '0.8rem',
-                            wordBreak: 'break-word',
+                            lineHeight: 1.5,
+                            overflowWrap: 'anywhere',
+                            wordBreak: 'normal',
                           }}>
                             {isOk ? 'All values valid' : example}
                           </Typography>

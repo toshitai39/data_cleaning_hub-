@@ -23,7 +23,6 @@ from .routers import (  # noqa: E402  (import after sys.path tweak)
     data_router,
     duplicates_router,
     export_router,
-    multi_file_router,
     profile_router,
     quality_router,
     rule_generator_router,
@@ -57,6 +56,5 @@ app.include_router(profile_router.router)
 app.include_router(duplicates_router.router)
 app.include_router(quality_router.router)
 app.include_router(rule_generator_router.router)
-app.include_router(multi_file_router.router)
 app.include_router(export_router.router)
 app.include_router(audit_router.router)

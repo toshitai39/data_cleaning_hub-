@@ -88,7 +88,6 @@ passwords from the Streamlit deployment.
 | Find Duplicates   | `POST /duplicates/{exact,fuzzy,remove-exact}`     | `FindDuplicates.jsx`   |
 | Data Quality      | `POST /quality/{generate-rules,apply}`            | `DataQuality.jsx`      |
 | Compare           | `GET /data/compare`, `POST /data/reset`           | `Compare.jsx`          |
-| Multi-File        | `POST /multi-file/compare`                        | `MultiFile.jsx`        |
 | Preview           | `GET /data/preview`                               | `Preview.jsx`          |
 | Export            | `POST /data/export?format=csv\|xlsx\|parquet\|…` | `Export.jsx`           |
 | Audit log         | `GET /audit/`                                     | (extension point)      |

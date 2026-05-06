@@ -1,9 +1,9 @@
-// Streamlit "section-header" CSS port — uppercase blue subtitle.
 export const sectionHeaderSx = {
   color: 'primary.main',
-  fontSize: '1rem',
+  fontSize: '0.85rem',
   fontWeight: 700,
   textTransform: 'uppercase',
-  letterSpacing: 2,
-  my: 2,
+  letterSpacing: '0.12em',
+  mt: 4,
+  mb: 2,
 };

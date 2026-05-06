@@ -12,7 +12,6 @@ import DataProfiling from './pages/DataProfiling.jsx';
 import FindDuplicates from './pages/FindDuplicates.jsx';
 import DataQuality from './pages/DataQuality.jsx';
 import Compare from './pages/Compare.jsx';
-import MultiFile from './pages/MultiFile.jsx';
 import Preview from './pages/Preview.jsx';
 import Export from './pages/Export.jsx';
 
@@ -24,7 +23,6 @@ const TABS = [
   { label: 'Find Duplicates', component: <FindDuplicates /> },
   { label: 'Data Quality', component: <DataQuality /> },
   { label: 'Compare', component: <Compare /> },
-  { label: 'Multi-File', component: <MultiFile /> },
   { label: 'Preview', component: <Preview /> },
   { label: 'Export', component: <Export /> },
 ];

@@ -154,14 +154,6 @@ class ExportRequest(BaseModel):
     sample_pct: Optional[float] = None
 
 
-# ---------- multi-file ----------------------------------------------------
-
-class MultiFileSchemaResponse(BaseModel):
-    files: List[str]
-    schema_table: List[Dict[str, Any]]
-    stats: List[Dict[str, Any]]
-
-
 # ---------- audit ---------------------------------------------------------
 
 class AuditEntry(BaseModel):
