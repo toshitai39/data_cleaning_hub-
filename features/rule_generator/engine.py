@@ -795,37 +795,20 @@ def generate_comprehensive_ai_prompt(column_name: str, sample_data: List[str], d
                                      metadata: Dict[str, Any], rule_source: str = None,
                                      all_columns: Optional[List[str]] = None,
                                      sibling_samples: Optional[Dict[str, List[str]]] = None) -> str:
-    """Build a deterministic data-quality prompt for one column.
+    """Build a deterministic per-column data-quality prompt.
 
-    Design choices to keep output stable across runs:
-      - Sample list is already sorted+deduped upstream; we render it the same
-        way every time.
-      - Output schema is fixed: exactly seven rules, fixed key names, fixed
-        dimension whitelist, no optional fields.
-      - Worked examples show expert-grade rules (fuzzy thresholds,
-        conditional presence, prefix-from-sibling) so the model has the
-        right shape to imitate, not generic equality.
+    Returns six rules — one per dimension Accuracy, Completeness, Consistency,
+    Timeliness, Validity, Uniqueness. Cross-field rules are produced by a
+    separate dedicated pass (see ``generate_cross_field_prompt``) so the
+    model can spend its attention budget on a single focused task.
 
-    ``all_columns`` supplies the sibling list for Cross-field Validation.
-    ``sibling_samples`` supplies up to 5 sample values for each sibling so
-    the model can ground cross-field rules in the actual data shape (e.g.
-    notice that ``country`` has values like ``["DE", "FR", "GB"]``).
+    The ``all_columns`` and ``sibling_samples`` arguments are accepted for
+    backward compatibility but are intentionally ignored here.
     """
+    del all_columns, sibling_samples  # reserved for caller compatibility
 
     samples = sample_data[:50] if sample_data else []
     sample_str = json.dumps(samples, ensure_ascii=False)
-    sibling_columns = sorted(c for c in (all_columns or []) if c != column_name)
-    if sibling_columns and sibling_samples:
-        sibling_lines = []
-        for name in sibling_columns:
-            preview = sibling_samples.get(name, [])
-            preview_str = json.dumps(preview[:5], ensure_ascii=False)
-            sibling_lines.append(f"- {name}: {preview_str}")
-        sibling_block = "\n".join(sibling_lines)
-    elif sibling_columns:
-        sibling_block = "\n".join(f"- {c}" for c in sibling_columns)
-    else:
-        sibling_block = "(this column is the only column in the dataset)"
 
     metadata_lines: List[str] = []
     if metadata:
@@ -860,9 +843,9 @@ def generate_comprehensive_ai_prompt(column_name: str, sample_data: List[str], d
     )
 
     prompt = f"""You are a data-quality rule engine. For the column described
-below, output exactly seven data-quality rules as JSON — one rule per
-dimension — covering the seven DQ dimensions including Cross-field
-Validation across sibling columns.
+below, output exactly six data-quality rules as JSON — one rule per
+dimension — covering the standard six DQ dimensions. Cross-field rules
+are handled by a separate pass and must NOT appear here.
 
 COLUMN UNDER REVIEW
 -------------------
@@ -871,10 +854,6 @@ Pandas dtype: {data_type}
 Null %: {null_pct:.1f}
 Unique %: {unique_pct:.1f}
 Distinct sample values (sorted, max 50): {sample_str}
-
-OTHER COLUMNS IN THE SAME DATASET (with up to 5 sample values each)
--------------------------------------------------------------------
-{sibling_block}
 
 EXTRACTED METADATA
 ------------------
@@ -899,42 +878,20 @@ DIMENSION DEFINITIONS (use these definitions verbatim)
   column is an identifier. For clearly non-identifier columns (categorical,
   low-cardinality, free text), emit:
   "<Field>: duplicates are allowed for this non-identifier field".
-- Cross-field Validation: a constraint that involves THIS column AND one
-  or more OTHER columns from the sibling list above. Inspect sibling sample
-  values to ground the rule in the actual data shape, not generic equality.
-  Strong cross-field rules include:
-    * Fuzzy/normalized composite uniqueness with a threshold:
-      "Flag probable duplicate when normalized name fuzzy match is ≥85%
-       and country and entity_type match exactly"
-    * Conditional presence keyed off another column's value:
-      "vat_no must be present when country is in [DE, FR, IT, ES, NL]"
-    * Prefix / format derived from a sibling:
-      "vat_no must start with the 2-letter country code stored in country"
-    * Cross-field arithmetic: "net + tax must equal gross within 0.01"
-    * Referential consistency: "currency must match the locale implied by
-      country (e.g. country=DE → currency=EUR)"
-  Pick siblings ONLY from the OTHER COLUMNS list. Do not invent column
-  names. Prefer rules that use sibling SAMPLE VALUES you can see above —
-  do not write generic "<col_a> + <col_b> must be unique together" if you
-  can write a more specific rule. If no plausible cross-field constraint
-  exists for this column, emit: "<Field>: no cross-field constraint
-  identified".
 
 INSTRUCTIONS
 ------------
-1. Emit exactly seven rules — one per dimension — in the order listed in
+1. Emit exactly six rules — one per dimension — in the order listed in
    the schema below. Do not skip a dimension. If a dimension does not
    apply, use the "not applicable" phrasing shown in the definitions.
 2. Rule wording: "<Field> must <verb> <condition>" (one concise sentence).
-   The "not applicable" / "no cross-field constraint" rules are the only
-   exceptions.
+   The "not applicable" rules are the only exceptions.
 3. Use evidence-based limits. If metadata supplies a max_length, allowed
    values, or a regex, use that exactly — do not invent thresholds.
-4. For Cross-field Validation: reference at least one sibling column by
-   its EXACT name from the OTHER COLUMNS list. Do not invent columns.
-5. The dimension field MUST be spelled EXACTLY as listed in the schema:
-   Accuracy, Completeness, Consistency, Timeliness, Validity, Uniqueness,
-   Cross-field Validation.
+4. The dimension field MUST be spelled EXACTLY as listed in the schema:
+   Accuracy, Completeness, Consistency, Timeliness, Validity, Uniqueness.
+5. Do NOT propose any rule that mentions another column. Cross-field rules
+   are produced by a separate pass.
 6. Return ONLY a JSON object — no prose, no markdown fence.
 
 OUTPUT SCHEMA (return exactly these keys, in this order)
@@ -942,78 +899,177 @@ OUTPUT SCHEMA (return exactly these keys, in this order)
 {{
   "business_field": "<human-readable field name, derived from column name>",
   "rules": [
-    {{ "dimension": "Accuracy",                "data_quality_rule": "<one sentence>" }},
-    {{ "dimension": "Completeness",            "data_quality_rule": "<one sentence>" }},
-    {{ "dimension": "Consistency",             "data_quality_rule": "<one sentence>" }},
-    {{ "dimension": "Timeliness",              "data_quality_rule": "<one sentence>" }},
-    {{ "dimension": "Validity",                "data_quality_rule": "<one sentence>" }},
-    {{ "dimension": "Uniqueness",              "data_quality_rule": "<one sentence>" }},
-    {{ "dimension": "Cross-field Validation",  "data_quality_rule": "<one sentence>" }}
+    {{ "dimension": "Accuracy",     "data_quality_rule": "<one sentence>" }},
+    {{ "dimension": "Completeness", "data_quality_rule": "<one sentence>" }},
+    {{ "dimension": "Consistency",  "data_quality_rule": "<one sentence>" }},
+    {{ "dimension": "Timeliness",   "data_quality_rule": "<one sentence>" }},
+    {{ "dimension": "Validity",     "data_quality_rule": "<one sentence>" }},
+    {{ "dimension": "Uniqueness",   "data_quality_rule": "<one sentence>" }}
   ]
 }}
 
-WORKED EXAMPLE 1 — entity name with composite fuzzy duplicate detection
------------------------------------------------------------------------
-Column "name" with siblings:
-- country: ["DE", "FR", "GB", "IN", "US"]
-- entity_type: ["Corporation", "LLC", "Partnership"]
-- pan_number: ["AAAPL1234C", "AAACN1234A"]
-
-{{
-  "business_field": "Name",
-  "rules": [
-    {{ "dimension": "Accuracy",                "data_quality_rule": "Name must match the legal or registered name on file with the issuing authority" }},
-    {{ "dimension": "Completeness",            "data_quality_rule": "Name must not be blank" }},
-    {{ "dimension": "Consistency",             "data_quality_rule": "Name must be stored with consistent casing and trimmed of leading or trailing whitespace" }},
-    {{ "dimension": "Timeliness",              "data_quality_rule": "Name: timeliness is not applicable for non-date fields" }},
-    {{ "dimension": "Validity",                "data_quality_rule": "Name must contain only letters, digits, spaces, hyphens, apostrophes, ampersands, and periods" }},
-    {{ "dimension": "Uniqueness",              "data_quality_rule": "Name: duplicates are allowed for this non-identifier field" }},
-    {{ "dimension": "Cross-field Validation",  "data_quality_rule": "Flag probable duplicate when normalized name fuzzy match is at least 85% and country and entity_type match exactly" }}
-  ]
-}}
-
-WORKED EXAMPLE 2 — VAT number derived from country
---------------------------------------------------
-Column "vat_no" with siblings:
-- country: ["DE", "FR", "IT", "GB", "NL"]
-- name: ["Acme GmbH", "Brico SARL"]
-- entity_type: ["Corporation", "LLC"]
-
+WORKED EXAMPLE — VAT number column (mandatory)
+----------------------------------------------
 {{
   "business_field": "VAT Number",
   "rules": [
-    {{ "dimension": "Accuracy",                "data_quality_rule": "VAT Number must correspond to an active VAT registration with the issuing tax authority" }},
-    {{ "dimension": "Completeness",            "data_quality_rule": "VAT Number must be present when country is in the EU member-state list" }},
-    {{ "dimension": "Consistency",             "data_quality_rule": "VAT Number must be stored in uppercase with no spaces, hyphens, or punctuation" }},
-    {{ "dimension": "Timeliness",              "data_quality_rule": "VAT Number: timeliness is not applicable for non-date fields" }},
-    {{ "dimension": "Validity",                "data_quality_rule": "VAT Number must be alphanumeric with length between 8 and 14 characters after normalization" }},
-    {{ "dimension": "Uniqueness",              "data_quality_rule": "VAT Number must be unique across all records once normalized" }},
-    {{ "dimension": "Cross-field Validation",  "data_quality_rule": "vat_no must start with the 2-letter ISO code stored in country (e.g. country=DE → vat_no starts with DE)" }}
-  ]
-}}
-
-WORKED EXAMPLE 3 — amount tied to currency and tax columns
-----------------------------------------------------------
-Column "gross_amount" with siblings:
-- net_amount: ["100.00", "250.00"]
-- tax_amount: ["18.00", "45.00"]
-- currency: ["INR", "USD", "EUR"]
-
-{{
-  "business_field": "Gross Amount",
-  "rules": [
-    {{ "dimension": "Accuracy",                "data_quality_rule": "Gross Amount must equal the actual invoiced total for the transaction" }},
-    {{ "dimension": "Completeness",            "data_quality_rule": "Gross Amount must not be blank" }},
-    {{ "dimension": "Consistency",             "data_quality_rule": "Gross Amount must be stored as a number with exactly two decimal places" }},
-    {{ "dimension": "Timeliness",              "data_quality_rule": "Gross Amount: timeliness is not applicable for non-date fields" }},
-    {{ "dimension": "Validity",                "data_quality_rule": "Gross Amount must be a non-negative number with at most two decimal places" }},
-    {{ "dimension": "Uniqueness",              "data_quality_rule": "Gross Amount: duplicates are allowed for this non-identifier field" }},
-    {{ "dimension": "Cross-field Validation",  "data_quality_rule": "gross_amount must equal net_amount + tax_amount within a tolerance of 0.01 in the same currency" }}
+    {{ "dimension": "Accuracy",     "data_quality_rule": "VAT Number must correspond to an active VAT registration with the issuing tax authority" }},
+    {{ "dimension": "Completeness", "data_quality_rule": "VAT Number must not be blank" }},
+    {{ "dimension": "Consistency",  "data_quality_rule": "VAT Number must be stored in uppercase with no spaces, hyphens, or punctuation" }},
+    {{ "dimension": "Timeliness",   "data_quality_rule": "VAT Number: timeliness is not applicable for non-date fields" }},
+    {{ "dimension": "Validity",     "data_quality_rule": "VAT Number must be alphanumeric with length between 8 and 14 characters after normalization" }},
+    {{ "dimension": "Uniqueness",   "data_quality_rule": "VAT Number must be unique across all records once normalized" }}
   ]
 }}
 """
 
     return prompt
+
+
+def generate_cross_field_prompt(target_column: str,
+                                target_samples: List[str],
+                                target_dtype: str,
+                                sibling_samples: Dict[str, List[str]]) -> str:
+    """Build a focused cross-field rule prompt for one column.
+
+    This runs as a separate LLM pass after the per-column rules have been
+    generated. The model's only job here is to find rules that involve
+    ``target_column`` AND at least one sibling column from
+    ``sibling_samples``. Output is 0–3 rules.
+
+    The 0–3 cap is honest: a column may have multiple cross-field
+    constraints (e.g. vat_no has both an EU-presence rule and a
+    country-prefix rule) or none at all (a free-text comment column may
+    have no plausible relationship to anything).
+    """
+    target_sample_str = json.dumps(target_samples[:50], ensure_ascii=False)
+
+    if sibling_samples:
+        sibling_lines = []
+        for name in sorted(sibling_samples.keys()):
+            preview = sibling_samples[name][:5]
+            sibling_lines.append(f"- {name}: {json.dumps(preview, ensure_ascii=False)}")
+        sibling_block = "\n".join(sibling_lines)
+    else:
+        sibling_block = "(no sibling columns)"
+
+    return f"""You are a data-quality rule engine specialising in cross-field
+constraints. Your ONLY job is to find rules that involve the TARGET column
+together with one or more SIBLING columns. Per-column single-field rules
+are out of scope and must not appear in your output.
+
+TARGET COLUMN
+-------------
+Name: {target_column}
+Pandas dtype: {target_dtype}
+Distinct sample values (sorted, max 50): {target_sample_str}
+
+SIBLING COLUMNS (with up to 5 sample values each)
+-------------------------------------------------
+{sibling_block}
+
+CROSS-FIELD RULE FAMILIES (think through each, in order)
+--------------------------------------------------------
+For each sibling, ask: does this sibling plausibly relate to the target?
+If yes, propose a specific, falsifiable rule. Use sibling SAMPLE VALUES to
+ground the rule. Generic rules without thresholds or specifics are not
+acceptable.
+
+1. Composite uniqueness with optional fuzzy threshold.
+   Strong: "Flag probable duplicate when normalized {target_column} fuzzy
+   match is at least 85% and <sibling_a> and <sibling_b> match exactly."
+   Weak (do NOT emit this shape): "<target> + <sibling> must be unique
+   together."
+
+2. Conditional presence keyed off a sibling's value.
+   Strong: "{target_column} must be present when <sibling> is in
+   [list of values from the sibling's samples]."
+
+3. Prefix / format derived from a sibling.
+   Strong: "{target_column} must start with the 2-letter ISO code stored
+   in <sibling> (e.g. <sibling>=DE → {target_column} starts with DE)."
+
+4. Cross-field arithmetic.
+   Strong: "{target_column} must equal <sibling_a> + <sibling_b> within
+   a tolerance of 0.01 in the same currency."
+
+5. Referential consistency / lookup.
+   Strong: "{target_column} must match the value implied by <sibling>
+   (e.g. <sibling>=US → {target_column} starts with '+1')."
+
+6. Conditional value derivation.
+   Strong: "{target_column} must be 'LLP' when <sibling> is
+   'LIMITED_LIABILITY_PARTNERSHIP'."
+
+INSTRUCTIONS
+------------
+1. Output 0–3 cross-field rules. Quality over quantity. Three weak rules
+   are worse than one strong rule.
+2. Each rule MUST reference at least one sibling column by its EXACT name
+   from the SIBLING COLUMNS list. Do not invent column names.
+3. Each rule MUST use specifics drawn from sibling sample values where
+   possible (a literal country code, a value list, a prefix). Generic
+   rules of the form "<target> + <sibling> must be consistent" are not
+   acceptable — be falsifiable.
+4. If — after honestly considering each sibling against each rule family —
+   no cross-field rule is plausible, return rules: []. An empty list is
+   correct and preferred over a fabricated rule.
+5. Return ONLY a JSON object matching the schema below.
+
+OUTPUT SCHEMA
+-------------
+{{
+  "business_field": "<human-readable field name, derived from target column>",
+  "rules": [
+    {{
+      "dimension": "Cross-field Validation",
+      "data_quality_rule": "<one sentence — must reference at least one sibling by name>",
+      "siblings_referenced": ["<sibling_name_1>", "<sibling_name_2>"]
+    }}
+  ]
+}}
+
+WORKED EXAMPLE 1 — vat_no with rich siblings
+--------------------------------------------
+TARGET: vat_no  SIBLINGS: country (["DE","FR","IT"]), name, entity_type
+{{
+  "business_field": "VAT Number",
+  "rules": [
+    {{
+      "dimension": "Cross-field Validation",
+      "data_quality_rule": "vat_no must start with the 2-letter ISO code stored in country (e.g. country=DE → vat_no starts with DE)",
+      "siblings_referenced": ["country"]
+    }},
+    {{
+      "dimension": "Cross-field Validation",
+      "data_quality_rule": "vat_no must be present when country is in [DE, FR, IT, ES, NL]",
+      "siblings_referenced": ["country"]
+    }}
+  ]
+}}
+
+WORKED EXAMPLE 2 — name with deduplication tuple
+------------------------------------------------
+TARGET: name  SIBLINGS: country, entity_type, pan_number
+{{
+  "business_field": "Name",
+  "rules": [
+    {{
+      "dimension": "Cross-field Validation",
+      "data_quality_rule": "Flag probable duplicate when normalized name fuzzy match is at least 85% and country and entity_type match exactly",
+      "siblings_referenced": ["country", "entity_type"]
+    }}
+  ]
+}}
+
+WORKED EXAMPLE 3 — column with no plausible cross-field relationship
+--------------------------------------------------------------------
+TARGET: customer_comment  SIBLINGS: customer_id, created_date
+{{
+  "business_field": "Customer Comment",
+  "rules": []
+}}
+"""
 
 
 # ═══════════════════════════════════════════════════════════════════════════
