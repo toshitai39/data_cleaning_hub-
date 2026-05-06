@@ -8,7 +8,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import CloseIcon from '@mui/icons-material/Close';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
-import ContentCopyOffOutlinedIcon from '@mui/icons-material/ContentCopyOffOutlined';
+import FilterAltOffOutlinedIcon from '@mui/icons-material/FilterAltOffOutlined';
 import DownloadIcon from '@mui/icons-material/Download';
 import api from '../../api.js';
 import { useDataset } from '../../context/DatasetContext.jsx';
@@ -289,7 +289,7 @@ export default function CrossFieldPanel() {
               <Button
                 onClick={() => applyFix('deduplicate', failingFor.id, failingFor.family, failingFor.count)}
                 disabled={acting}
-                startIcon={<ContentCopyOffOutlinedIcon />}
+                startIcon={<FilterAltOffOutlinedIcon />}
                 variant="contained"
                 color="warning"
               >
