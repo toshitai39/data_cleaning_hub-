@@ -837,7 +837,8 @@ def generate_comprehensive_ai_prompt(column_name: str, sample_data: List[str], d
     )
 
     prompt = f"""You are a data-quality rule engine. For the column described
-below, output exactly three data-quality rules as JSON.
+below, output exactly six data-quality rules as JSON — one rule per
+dimension — covering the standard six DQ dimensions.
 
 COLUMN
 ------
@@ -852,21 +853,36 @@ EXTRACTED METADATA
 {metadata_block}
 {rule_source_block}
 
+DIMENSION DEFINITIONS (use these definitions verbatim)
+------------------------------------------------------
+- Accuracy: the value reflects the real-world entity it represents.
+  Anchor on sample values and column semantics (e.g. an email column's
+  values must be syntactically resolvable; an amount must be a non-negative
+  number when the field is a price).
+- Completeness: the value is present (not null, not blank, not whitespace).
+- Consistency: the value follows a uniform representation across rows
+  (e.g. consistent casing, consistent date format, consistent code system).
+- Timeliness: the value is current and within an expected time window.
+  Only meaningful for date/time columns. For non-date columns, emit:
+  "<Field>: timeliness is not applicable for non-date fields".
+- Validity: the value satisfies the column's structural rules — data type,
+  length, allowed values, regex / format pattern.
+- Uniqueness: the value does not duplicate another row's value when the
+  column is an identifier. For clearly non-identifier columns (categorical,
+  low-cardinality, free text), emit:
+  "<Field>: duplicates are allowed for this non-identifier field".
+
 INSTRUCTIONS
 ------------
-1. Pick exactly three rules — one per dimension — from this fixed set:
-   Completeness, Validity, Uniqueness.
-   - Completeness: covers nulls / blanks. Always applicable.
-   - Validity: covers length, data type, format, allowed-values, range.
-   - Uniqueness: covers duplicates. If the column is clearly not an
-     identifier (e.g. categorical, low cardinality, free text), still emit a
-     Uniqueness rule but phrase it as "Duplicates are allowed for this
-     non-identifier field" so the count stays consistent.
-2. Rule wording: "<Field> must <verb> <condition>". Concise, single sentence.
-3. Prefer evidence-based limits. If metadata gives a max_length, use that
-   exact number. Do not invent constraints the data does not support.
-4. The dimension field MUST be one of: Completeness, Validity, Uniqueness.
-   Spelled exactly as shown.
+1. Emit exactly six rules — one per dimension — in the order listed in the
+   schema below. Do not skip a dimension. If a dimension does not apply,
+   use the "not applicable" phrasing shown in the definitions above.
+2. Rule wording: "<Field> must <verb> <condition>" (one concise sentence).
+   The "not applicable" rules are the only exception.
+3. Use evidence-based limits. If metadata supplies a max_length, allowed
+   values, or a regex, use that exactly — do not invent thresholds.
+4. The dimension field MUST be spelled EXACTLY as listed in the schema:
+   Accuracy, Completeness, Consistency, Timeliness, Validity, Uniqueness.
 5. Return ONLY a JSON object — no prose, no markdown fence.
 
 OUTPUT SCHEMA (return exactly these keys, in this order)
@@ -874,18 +890,12 @@ OUTPUT SCHEMA (return exactly these keys, in this order)
 {{
   "business_field": "<human-readable field name, derived from column name>",
   "rules": [
-    {{
-      "dimension": "Completeness",
-      "data_quality_rule": "<one sentence rule>"
-    }},
-    {{
-      "dimension": "Validity",
-      "data_quality_rule": "<one sentence rule>"
-    }},
-    {{
-      "dimension": "Uniqueness",
-      "data_quality_rule": "<one sentence rule>"
-    }}
+    {{ "dimension": "Accuracy",     "data_quality_rule": "<one sentence>" }},
+    {{ "dimension": "Completeness", "data_quality_rule": "<one sentence>" }},
+    {{ "dimension": "Consistency",  "data_quality_rule": "<one sentence>" }},
+    {{ "dimension": "Timeliness",   "data_quality_rule": "<one sentence>" }},
+    {{ "dimension": "Validity",     "data_quality_rule": "<one sentence>" }},
+    {{ "dimension": "Uniqueness",   "data_quality_rule": "<one sentence>" }}
   ]
 }}
 
@@ -896,18 +906,26 @@ For a column "Email Address *" with metadata {{mandatory: YES}}:
 {{
   "business_field": "Email Address",
   "rules": [
-    {{
-      "dimension": "Completeness",
-      "data_quality_rule": "Email Address must not be blank"
-    }},
-    {{
-      "dimension": "Validity",
-      "data_quality_rule": "Email Address must follow standard email format (local@domain.tld)"
-    }},
-    {{
-      "dimension": "Uniqueness",
-      "data_quality_rule": "Email Address must be unique across all records"
-    }}
+    {{ "dimension": "Accuracy",     "data_quality_rule": "Email Address must correspond to a deliverable mailbox for the associated person" }},
+    {{ "dimension": "Completeness", "data_quality_rule": "Email Address must not be blank" }},
+    {{ "dimension": "Consistency",  "data_quality_rule": "Email Address must be stored in lowercase with no surrounding whitespace" }},
+    {{ "dimension": "Timeliness",   "data_quality_rule": "Email Address: timeliness is not applicable for non-date fields" }},
+    {{ "dimension": "Validity",     "data_quality_rule": "Email Address must follow standard email format (local@domain.tld)" }},
+    {{ "dimension": "Uniqueness",   "data_quality_rule": "Email Address must be unique across all records" }}
+  ]
+}}
+
+For a column "Created Date":
+
+{{
+  "business_field": "Created Date",
+  "rules": [
+    {{ "dimension": "Accuracy",     "data_quality_rule": "Created Date must reflect the actual moment the record was created" }},
+    {{ "dimension": "Completeness", "data_quality_rule": "Created Date must not be blank" }},
+    {{ "dimension": "Consistency",  "data_quality_rule": "Created Date must be stored in a single ISO 8601 format across all rows" }},
+    {{ "dimension": "Timeliness",   "data_quality_rule": "Created Date must not be in the future and must be within the last 10 years" }},
+    {{ "dimension": "Validity",     "data_quality_rule": "Created Date must be a parseable date in YYYY-MM-DD format" }},
+    {{ "dimension": "Uniqueness",   "data_quality_rule": "Created Date: duplicates are allowed for this non-identifier field" }}
   ]
 }}
 """
