@@ -34,8 +34,77 @@ post_process_rules = _engine.post_process_rules
 validate_all_rules = _engine.validate_all_rules
 
 from .azure_openai_config import AzureOpenAIConfig
+from .cross_field_engine import evaluate_cross_field_rule, make_azure_translator
 
 logger = logging.getLogger(__name__)
+
+
+def _build_azure_client():
+    """Construct the Azure OpenAI client used for both rule generation
+    and the cross-field translator fallback."""
+    from openai import AzureOpenAI
+    return AzureOpenAI(
+        api_version=AzureOpenAIConfig.AZURE_OPENAI_API_VERSION,
+        azure_endpoint=AzureOpenAIConfig.AZURE_OPENAI_ENDPOINT,
+        api_key=AzureOpenAIConfig.AZURE_OPENAI_KEY,
+    )
+
+
+def evaluate_cross_field_rules_in_df(
+    df_rules: pd.DataFrame,
+    data_df: pd.DataFrame,
+    use_llm_fallback: bool = True,
+) -> pd.DataFrame:
+    """Run the cross-field executor across every cross-field row in
+    ``df_rules`` and populate Issues Found / Issues Found Example /
+    Validation Expression in place.
+
+    Single-column rows are untouched. The function returns the same
+    dataframe (mutated copy) for chaining.
+    """
+    out = df_rules.copy()
+    if "Validation Expression" not in out.columns:
+        out["Validation Expression"] = ""
+
+    cross_mask = out["Dimension"].astype(str).str.strip() == "Cross-field Validation"
+    if not cross_mask.any():
+        return out
+
+    translator = None
+    if use_llm_fallback:
+        try:
+            client = _build_azure_client()
+            translator = make_azure_translator(
+                client, AzureOpenAIConfig.AZURE_OPENAI_DEPLOYMENT,
+            )
+        except Exception as exc:
+            logger.warning("Could not build Azure translator for cross-field fallback: %s", exc)
+            translator = None
+
+    for idx in out.index[cross_mask]:
+        rule_text = str(out.at[idx, "Data Quality Rule"])
+        try:
+            result = evaluate_cross_field_rule(rule_text, data_df, translator)
+        except Exception as exc:
+            logger.warning("Cross-field executor raised on rule %r: %s", rule_text[:80], exc)
+            out.at[idx, "Issues Found"] = 0
+            out.at[idx, "Issues Found Example"] = f"Cross-field — manual review (executor error: {exc})"
+            out.at[idx, "Validation Expression"] = ""
+            continue
+
+        out.at[idx, "Issues Found"] = int(result.count)
+        out.at[idx, "Issues Found Example"] = result.example
+        out.at[idx, "Validation Expression"] = result.expression
+
+        # Refresh the Column / Business Field cells if the executor
+        # identified the actual columns more accurately than the upstream
+        # tuple-builder did.
+        if result.columns and result.family != "manual":
+            tuple_label = " + ".join(result.columns)
+            out.at[idx, "Column"] = tuple_label
+            out.at[idx, "Business Field"] = tuple_label
+
+    return out
 
 
 def generate_rules_with_comprehensive_engine(
@@ -236,6 +305,7 @@ def generate_rules_with_comprehensive_engine(
                 "Regex Pattern": "",
                 "Issues Found": 0,
                 "Issues Found Example": f"Error: {res['error']}",
+                "Validation Expression": "",
             })
             continue
         for rule in res["rules"]:
@@ -249,6 +319,7 @@ def generate_rules_with_comprehensive_engine(
                 "Regex Pattern": (rule.get("regex_pattern") or ""),
                 "Issues Found": rule.get("issues_found", 0),
                 "Issues Found Example": rule.get("issues_found_example", "All values valid - No issues found"),
+                "Validation Expression": "",
             })
         for cf in cross_field_by_primary.get(str(column_name), []):
             tuple_label = " + ".join(cf["columns"])
@@ -261,7 +332,8 @@ def generate_rules_with_comprehensive_engine(
                 "Data Quality Rule": cf["data_quality_rule"],
                 "Regex Pattern": "",
                 "Issues Found": 0,
-                "Issues Found Example": "All values valid - No issues found",
+                "Issues Found Example": "Cross-field — pending evaluation",
+                "Validation Expression": "",
             })
 
     return pd.DataFrame(all_rules)
@@ -274,14 +346,17 @@ def generate_complete(
     df: pd.DataFrame,
     progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> pd.DataFrame:
-    """Full end-to-end pipeline matching the Streamlit button click:
-    1) generate rules via comprehensive engine
-    2) validate against actual data
-    3) enrich regex patterns
+    """Full end-to-end pipeline:
+    1. generate rules via the per-column + cross-field passes
+    2. validate single-column rules against actual data
+    3. evaluate cross-field rules through the executor (with LLM fallback
+       for shapes the family parsers don't cover)
+    4. enrich regex patterns for single-column rules
     """
     df_rules = generate_rules_with_comprehensive_engine(
         file_path, sheet_name, header_row, df, progress_cb,
     )
     df_rules = validate_all_rules(df, df_rules)
+    df_rules = evaluate_cross_field_rules_in_df(df_rules, df)
     df_rules = enrich_dataframe_regex_patterns(df_rules)
     return df_rules

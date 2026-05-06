@@ -14,6 +14,7 @@ import EmptyState from '../components/EmptyState.jsx';
 import { useDataset } from '../context/DatasetContext.jsx';
 import ColumnRow from './quality/ColumnRow.jsx';
 import AiRegexDialog from './quality/AiRegexDialog.jsx';
+import CrossFieldPanel from './quality/CrossFieldPanel.jsx';
 import {
   LibrarySaveDialog, LibraryLoadDialog, LibraryDeleteDialog,
 } from './quality/LibraryDialogs.jsx';
@@ -257,6 +258,10 @@ export default function DataQuality() {
             onConfigChange={updateRowConfig} onRefresh={loadAll} />
         ))}
       </Paper>
+
+      {/* Cross-field rules — separate panel because they span multiple
+          columns and don't fit the per-column editor above. */}
+      <CrossFieldPanel />
 
       {/* History */}
       {history.length > 0 && (

@@ -277,6 +277,12 @@ AZURE_OPENAI_MAX_RPM=60`}
                   const issues = Number(r['Issues Found']) || 0;
                   const example = String(r['Issues Found Example'] || '');
                   const isCrossField = r.Dimension === 'Cross-field Validation';
+                  // For cross-field rules: "manual review" means the
+                  // executor couldn't evaluate it. Anything else means
+                  // it ran and we should display real numbers.
+                  const crossFieldUnevaluated = isCrossField && example.toLowerCase().includes('manual review');
+                  const validationExpr = String(r['Validation Expression'] || '');
+                  const regexCellContent = isCrossField ? validationExpr : String(r['Regex Pattern'] || '');
                   const isOk = !example || example.startsWith('All values valid');
                   const dim = dimensionStyle(r.Dimension);
                   const src = sourceChipProps(r['Rule Source']);
@@ -322,8 +328,8 @@ AZURE_OPENAI_MAX_RPM=60`}
                       </TableCell>
                       <TableCell sx={{ color: 'text.primary' }}>{r['Data Quality Rule']}</TableCell>
                       <TableCell sx={{ maxWidth: 220 }}>
-                        {r['Regex Pattern'] ? (
-                          <Tooltip title={r['Regex Pattern']} placement="top">
+                        {regexCellContent ? (
+                          <Tooltip title={regexCellContent} placement="top">
                             <Box component="code" sx={{
                               display: 'inline-block',
                               maxWidth: '100%',
@@ -339,7 +345,7 @@ AZURE_OPENAI_MAX_RPM=60`}
                               whiteSpace: 'nowrap',
                               verticalAlign: 'middle',
                             }}>
-                              {r['Regex Pattern']}
+                              {regexCellContent}
                             </Box>
                           </Tooltip>
                         ) : (
@@ -349,15 +355,15 @@ AZURE_OPENAI_MAX_RPM=60`}
                       <TableCell align="right" sx={{
                         fontVariantNumeric: 'tabular-nums',
                         fontWeight: 600,
-                        color: isCrossField
+                        color: crossFieldUnevaluated
                           ? 'text.disabled'
                           : issues > 0 ? 'error.main' : 'text.disabled',
                       }}>
-                        {isCrossField ? '—' : issues}
+                        {crossFieldUnevaluated ? '—' : issues}
                       </TableCell>
                       <TableCell sx={{ minWidth: 260, maxWidth: 360 }}>
                         <Stack direction="row" spacing={0.75} alignItems="flex-start">
-                          {isCrossField ? (
+                          {crossFieldUnevaluated ? (
                             <InfoOutlinedIcon sx={{ fontSize: 16, color: 'info.main', mt: '3px', flexShrink: 0 }} />
                           ) : isOk ? (
                             <CheckCircleOutlineIcon sx={{ fontSize: 16, color: 'success.main', mt: '3px', flexShrink: 0 }} />
@@ -365,13 +371,13 @@ AZURE_OPENAI_MAX_RPM=60`}
                             <ErrorOutlineIcon sx={{ fontSize: 16, color: 'warning.main', mt: '3px', flexShrink: 0 }} />
                           )}
                           <Typography variant="body2" sx={{
-                            color: isCrossField ? 'text.secondary' : isOk ? 'text.secondary' : 'text.primary',
+                            color: crossFieldUnevaluated ? 'text.secondary' : isOk ? 'text.secondary' : 'text.primary',
                             fontSize: '0.8rem',
                             lineHeight: 1.5,
                             overflowWrap: 'anywhere',
                             wordBreak: 'normal',
                           }}>
-                            {isCrossField
+                            {crossFieldUnevaluated
                               ? 'Cross-field — manual review'
                               : isOk ? 'All values valid' : example}
                           </Typography>
