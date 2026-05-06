@@ -26,7 +26,6 @@ from core.rule_library import (
 from ..deps import require_dataframe
 from ..services.azure_openai_config import AzureOpenAIConfig
 from ..services.cross_field_engine import (
-    _extract_value_list as _cf_extract_value_list,
     evaluate_cross_field_rule,
     make_azure_translator,
 )
@@ -100,6 +99,10 @@ class LibraryLoadBody(BaseModel):
 
 class ImportRulesBody(BaseModel):
     rules: Dict[str, Any]
+
+
+class CrossFieldFixBody(BaseModel):
+    action: str  # 'drop' | 'deduplicate'
 
 
 # ---------- columns / config ---------------------------------------------
@@ -557,6 +560,10 @@ def cross_field_failing_rows(
         raise HTTPException(status_code=500, detail=f"Cross-field executor failed: {exc}")
 
     cols_to_show = [c for c in result.columns if c in sess.df.columns]
+    failing_sample: List[Dict[str, Any]] = []
+    if result.failing_mask is not None and cols_to_show:
+        failing_subset = sess.df.loc[result.failing_mask, cols_to_show].head(limit)
+        failing_sample = _df_records(failing_subset, limit=limit)
     return {
         "rule": rule_text,
         "expression": result.expression,
@@ -564,57 +571,122 @@ def cross_field_failing_rows(
         "count": int(result.count),
         "example": result.example,
         "columns": cols_to_show,
-        "failing_sample": _df_records(
-            sess.df.head(limit) if result.family == "manual" else _failing_subset(sess.df, rule_text, result, limit),
-            limit=limit,
-        ) if cols_to_show else [],
+        "failing_sample": failing_sample,
     }
 
 
-def _failing_subset(df: pd.DataFrame, rule_text: str, result, limit: int) -> pd.DataFrame:
-    """Re-derive the failing-row mask for the four mechanical families.
+def _resolve_cross_field_rule(
+    rule_id: int, sess: SessionData,
+) -> tuple:
+    """Re-run the executor for a stored cross-field rule.
 
-    For the LLM-translated family we don't re-evaluate here because that
-    would need a second LLM call; we just return the head of the relevant
-    columns so the user can eyeball them.
+    Returns ``(rule_text, result)`` where ``result`` is the freshest
+    ``CrossFieldResult`` against ``sess.df``. Raises HTTPException if the
+    id is invalid or the rule is not a cross-field rule.
     """
-    cols = [c for c in result.columns if c in df.columns]
-    if not cols:
-        return df.head(0)
-    if result.family == "composite_unique":
-        sub = df[cols]
-        mask = sub.duplicated(keep=False)
-        return sub[mask].head(limit)
-    if result.family == "prefix_from_sibling" and len(cols) >= 2:
-        target, sibling = cols[0], cols[1]
-        target_str = df[target].astype(str).str.upper().str.strip()
-        sibling_str = df[sibling].astype(str).str.upper().str.strip()
-        either_blank = (
-            df[target].isnull() | df[target].astype(str).str.strip().eq("")
-            | df[sibling].isnull() | df[sibling].astype(str).str.strip().eq("")
-        )
-        mask = ~target_str.combine(sibling_str, lambda t, s: bool(s) and t.startswith(s)) & ~either_blank
-        return df.loc[mask, cols].head(limit)
-    if result.family == "arithmetic" and len(cols) >= 3:
-        target = cols[0]
-        addends = cols[1:]
-        target_num = pd.to_numeric(df[target], errors="coerce")
-        expected = sum(pd.to_numeric(df[c], errors="coerce") for c in addends)
-        # Pull the tolerance back out of the description: e.g. "± 0.01".
-        import re
-        m = re.search(r"[±\+\-]\s*([0-9]*\.?[0-9]+)", result.expression)
-        tol = float(m.group(1)) if m else 0.0
-        mask = (target_num - expected).abs() > tol
-        mask = mask & target_num.notna() & expected.notna()
-        return df.loc[mask, cols].head(limit)
-    if result.family == "conditional_presence" and len(cols) >= 2:
-        target, context = cols[0], cols[1]
-        values = _cf_extract_value_list(rule_text) or []
-        if not values:
-            return df.head(0)
-        values_norm = {v.strip().lower() for v in values}
-        in_scope = df[context].astype(str).str.strip().str.lower().isin(values_norm)
-        blank = df[target].isnull() | df[target].astype(str).str.strip().eq("")
-        mask = in_scope & blank
-        return df.loc[mask, cols].head(limit)
-    return df.head(0)
+    df_rules = sess.ai_validation_rules
+    if df_rules is None or not isinstance(df_rules, pd.DataFrame) or df_rules.empty:
+        raise HTTPException(status_code=404, detail="No cross-field rules generated yet")
+    if rule_id not in df_rules.index:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    row = df_rules.loc[rule_id]
+    if str(row.get("Dimension", "")).strip() != "Cross-field Validation":
+        raise HTTPException(status_code=400, detail="Rule is not a cross-field rule")
+    rule_text = str(row.get("Data Quality Rule", ""))
+    translator = _build_cross_field_translator()
+    try:
+        result = evaluate_cross_field_rule(rule_text, sess.df, translator)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Cross-field executor failed: {exc}")
+    return rule_text, result
+
+
+@router.post("/cross-field/fix/{rule_id}")
+def fix_cross_field(
+    rule_id: int,
+    body: CrossFieldFixBody,
+    sess: SessionData = Depends(require_dataframe),
+) -> dict:
+    """Apply an automated fix to a cross-field rule's failing rows.
+
+    Supported actions:
+      - ``drop``: remove every row in the failing mask. Works for any
+        family. WARNING: for ``composite_unique`` this drops *all*
+        copies including the first occurrence.
+      - ``deduplicate``: only valid for ``composite_unique``. Keeps the
+        first occurrence of each tuple, drops the subsequent duplicates.
+
+    Always operates on ``sess.df`` only; ``sess.original_df`` is left
+    untouched so the user can reset via the Compare tab.
+    """
+    rule_text, result = _resolve_cross_field_rule(rule_id, sess)
+
+    if result.failing_mask is None or int(result.count) == 0:
+        return {
+            "ok": True, "action": body.action, "rows_dropped": 0,
+            "rows_remaining": int(len(sess.df)),
+            "note": "Rule has no failing rows; nothing to do.",
+        }
+
+    if body.action == "deduplicate":
+        if result.family != "composite_unique":
+            raise HTTPException(
+                status_code=400,
+                detail="'deduplicate' is only valid for composite_unique rules",
+            )
+        cols = [c for c in result.columns if c in sess.df.columns]
+        before = int(len(sess.df))
+        sess.df = sess.df.drop_duplicates(subset=cols, keep="first").reset_index(drop=True)
+        dropped = before - int(len(sess.df))
+    elif body.action == "drop":
+        before = int(len(sess.df))
+        sess.df = sess.df.loc[~result.failing_mask].reset_index(drop=True)
+        dropped = before - int(len(sess.df))
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown action: {body.action}")
+
+    sess.fixes_applied.append({
+        "type": "cross_field",
+        "rule_id": int(rule_id),
+        "rule": rule_text[:120],
+        "action": body.action,
+        "family": result.family,
+        "rows_dropped": dropped,
+        "timestamp": datetime.now().isoformat(),
+    })
+
+    return {
+        "ok": True,
+        "action": body.action,
+        "rows_dropped": dropped,
+        "rows_remaining": int(len(sess.df)),
+    }
+
+
+@router.get("/cross-field/export/{rule_id}")
+def export_cross_field_failing(
+    rule_id: int,
+    sess: SessionData = Depends(require_dataframe),
+):
+    """Stream a CSV of the rows that violate one cross-field rule.
+
+    The export includes the full row (all columns) so the user has the
+    context they need for review outside the tool.
+    """
+    rule_text, result = _resolve_cross_field_rule(rule_id, sess)
+
+    if result.failing_mask is None or int(result.count) == 0:
+        failing = sess.df.head(0)
+    else:
+        failing = sess.df.loc[result.failing_mask]
+
+    buf = io.StringIO()
+    failing.to_csv(buf, index_label="row_index")
+    buf.seek(0)
+    safe_name = "".join(c if c.isalnum() else "_" for c in rule_text[:50]).strip("_") or f"rule_{rule_id}"
+    fname = f"failing_{safe_name}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )

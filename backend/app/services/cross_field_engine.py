@@ -44,12 +44,19 @@ class CrossFieldResult:
             frontend and downstream consumers can see what actually
             executed (rather than the original English).
         columns: the columns the rule actually evaluated against.
+        failing_mask: boolean Series aligned with the dataframe index
+            marking rows that violate the rule. Set by every parser when
+            ``count > 0``. ``None`` for ``family == "manual"`` because the
+            rule was not actually evaluated. The caller uses this mask to
+            extract failing rows or apply automated fixes — it must NEVER
+            be re-derived in client code, which is why we store it here.
     """
     family: str
     count: int
     example: str
     expression: str
     columns: List[str] = field(default_factory=list)
+    failing_mask: Optional[pd.Series] = field(default=None, repr=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -168,6 +175,7 @@ def _try_composite_unique(
         example=example,
         expression=f"composite_unique({', '.join(cols)})",
         columns=cols,
+        failing_mask=dup_mask if count > 0 else None,
     )
 
 
@@ -215,6 +223,7 @@ def _try_conditional_presence(
         example=example,
         expression=expr,
         columns=[target, context],
+        failing_mask=bad_mask if count > 0 else None,
     )
 
 
@@ -273,6 +282,7 @@ def _try_prefix_from_sibling(
         example=example,
         expression=f"{op}({target}, {sibling})",
         columns=[target, sibling],
+        failing_mask=bad_mask if count > 0 else None,
     )
 
 
@@ -325,6 +335,7 @@ def _try_arithmetic(
         example=example,
         expression=f"{target} == {' + '.join(addends)} ± {tolerance}",
         columns=[target, *addends],
+        failing_mask=bad_mask if count > 0 else None,
     )
 
 
@@ -413,7 +424,17 @@ def evaluate_cross_field_rule(
 # Bare names allowed at the root of the LLM-emitted expression. Attribute
 # access (e.g. pd.to_datetime, df['col'].str.upper()) is allowed via the
 # AST walk below as long as the *root* of the chain is one of these.
-_SAFE_ROOT_NAMES = {"df", "pd", "np"}
+#
+# Type-conversion builtins (str, int, float, bool, len, abs) are included
+# because pandas idioms commonly use them — e.g. ``df['x'].astype(str)``.
+# They are safe in this sandbox because the AST walker still rejects any
+# dunder attribute access (``str.__class__.__bases__[0].__subclasses__()``
+# can't be reached because ``__class__`` is in _FORBIDDEN_ATTRS).
+_SAFE_ROOT_NAMES = {
+    "df", "pd", "np",
+    "str", "int", "float", "bool", "len", "abs",
+    "True", "False", "None",
+}
 
 # AST node types allowed anywhere in the expression. Anything else (Lambda,
 # Call to __import__, list/set comprehensions with stores, etc.) is rejected.
@@ -500,7 +521,15 @@ def _run_llm_expression(
         logger.warning("LLM expression rejected - %s; code: %s", reason, code[:120])
         return None
 
-    sandbox = {"df": df, "pd": pd, "np": np, "__builtins__": {}}
+    # Strip __builtins__ to None so eval can't reach `__import__`, `open`,
+    # etc. Hand-pick the type-conversion builtins the AST walker already
+    # accepted so common pandas idioms (``astype(str)``) keep working.
+    sandbox = {
+        "df": df, "pd": pd, "np": np,
+        "str": str, "int": int, "float": float, "bool": bool,
+        "len": len, "abs": abs,
+        "__builtins__": {},
+    }
     try:
         bad_mask = eval(compile(tree, "<llm-cross-field>", "eval"), sandbox, {})
     except Exception as exc:
@@ -542,6 +571,7 @@ def _run_llm_expression(
         example=example,
         expression=description or code,
         columns=candidates,
+        failing_mask=bad_mask if count > 0 else None,
     )
 
 

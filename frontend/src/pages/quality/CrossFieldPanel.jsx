@@ -1,13 +1,17 @@
 import { useEffect, useState } from 'react';
 import {
-  Box, Paper, Typography, Stack, Button, Chip, LinearProgress, Alert,
+  Box, Paper, Typography, Stack, Button, Chip, LinearProgress, Alert, Snackbar,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Dialog, DialogTitle, DialogContent, DialogActions, IconButton,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import CloseIcon from '@mui/icons-material/Close';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import ContentCopyOffOutlinedIcon from '@mui/icons-material/ContentCopyOffOutlined';
+import DownloadIcon from '@mui/icons-material/Download';
 import api from '../../api.js';
+import { useDataset } from '../../context/DatasetContext.jsx';
 
 const FAMILY_LABEL = {
   composite_unique:      'Composite uniqueness',
@@ -28,11 +32,14 @@ const FAMILY_COLOR = {
 };
 
 export default function CrossFieldPanel() {
+  const { refresh } = useDataset();
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [acting, setActing] = useState(false);
   const [err, setErr] = useState('');
+  const [toast, setToast] = useState('');
   const [evaluated, setEvaluated] = useState(false);
-  const [failingFor, setFailingFor] = useState(null); // { rule, columns, sample }
+  const [failingFor, setFailingFor] = useState(null); // { id, rule, columns, sample, family }
 
   const load = async () => {
     setLoading(true); setErr('');
@@ -56,6 +63,7 @@ export default function CrossFieldPanel() {
         params: { limit: 50 },
       });
       setFailingFor({
+        id: rule.id,
         rule: data.rule,
         expression: data.expression,
         family: data.family,
@@ -67,6 +75,54 @@ export default function CrossFieldPanel() {
       setErr(e?.response?.data?.detail || 'Failed to load failing rows');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // ── Actions on the failing-rows dialog ───────────────────────────────
+  const applyFix = async (action, ruleId, family, count) => {
+    if (acting) return;
+    const headline = action === 'deduplicate'
+      ? 'Deduplicate this group of duplicate tuples?'
+      : `Drop ${count} failing row${count === 1 ? '' : 's'} from the working dataset?`;
+    const detail = action === 'deduplicate'
+      ? 'For each duplicate tuple, the first occurrence is kept and the rest are dropped.'
+      : 'These rows will be removed from the current working copy.';
+    const tail = 'The original snapshot is preserved — you can reset from the Compare tab.';
+    if (!window.confirm(`${headline}\n\n${detail}\n\n${tail}`)) return;
+    setActing(true); setErr('');
+    try {
+      const { data } = await api.post(`/quality/cross-field/fix/${ruleId}`, { action });
+      setToast(`${data.rows_dropped} row(s) dropped — ${data.rows_remaining} remaining`);
+      setFailingFor(null);
+      await load();
+      await refresh();
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'Failed to apply fix');
+    } finally {
+      setActing(false);
+    }
+  };
+
+  const exportCsv = async (ruleId) => {
+    if (acting) return;
+    setActing(true); setErr('');
+    try {
+      const resp = await api.get(`/quality/cross-field/export/${ruleId}`, {
+        responseType: 'blob',
+      });
+      // Pull filename from Content-Disposition or fall back
+      const cd = resp.headers['content-disposition'] || '';
+      const m = cd.match(/filename="?([^";]+)"?/i);
+      const fname = m ? m[1] : `failing_rule_${ruleId}.csv`;
+      const url = window.URL.createObjectURL(new Blob([resp.data], { type: 'text/csv' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = fname; a.click();
+      window.URL.revokeObjectURL(url);
+      setToast('CSV downloaded');
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'Failed to export CSV');
+    } finally {
+      setActing(false);
     }
   };
 
@@ -214,10 +270,56 @@ export default function CrossFieldPanel() {
             </>
           )}
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setFailingFor(null)}>Close</Button>
+        <DialogActions sx={{ flexWrap: 'wrap', gap: 1, justifyContent: 'space-between', px: 3, pb: 2 }}>
+          <Box>
+            {failingFor && failingFor.count > 0 && (
+              <Button
+                onClick={() => exportCsv(failingFor.id)}
+                disabled={acting}
+                startIcon={<DownloadIcon />}
+                variant="outlined"
+              >
+                Export CSV
+              </Button>
+            )}
+          </Box>
+          <Stack direction="row" spacing={1}>
+            <Button onClick={() => setFailingFor(null)} disabled={acting}>Close</Button>
+            {failingFor && failingFor.count > 0 && failingFor.family === 'composite_unique' && (
+              <Button
+                onClick={() => applyFix('deduplicate', failingFor.id, failingFor.family, failingFor.count)}
+                disabled={acting}
+                startIcon={<ContentCopyOffOutlinedIcon />}
+                variant="contained"
+                color="warning"
+              >
+                Deduplicate (keep first)
+              </Button>
+            )}
+            {failingFor && failingFor.count > 0
+              && failingFor.family !== 'manual'
+              && failingFor.family !== 'composite_unique' && (
+              <Button
+                onClick={() => applyFix('drop', failingFor.id, failingFor.family, failingFor.count)}
+                disabled={acting}
+                startIcon={<DeleteOutlineIcon />}
+                variant="contained"
+                color="error"
+              >
+                Drop {failingFor.count} row{failingFor.count === 1 ? '' : 's'}
+              </Button>
+            )}
+          </Stack>
         </DialogActions>
       </Dialog>
+
+      <Snackbar
+        open={!!toast}
+        autoHideDuration={4000}
+        onClose={() => setToast('')}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        message={toast}
+      />
     </Paper>
   );
 }
