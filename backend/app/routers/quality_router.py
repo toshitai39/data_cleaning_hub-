@@ -23,7 +23,7 @@ from core.rule_library import (
     save_rule_set as _save_rule_set,
 )
 
-from ..deps import require_dataframe
+from ..deps import require_dataframe, scoped_columns
 from ..services.azure_openai_config import AzureOpenAIConfig
 from ..services.cross_field_engine import (
     evaluate_cross_field_rule,
@@ -47,8 +47,8 @@ router = APIRouter(prefix="/quality", tags=["quality"])
 # ---------- helpers ------------------------------------------------------
 
 def _ensure_config(sess: SessionData) -> None:
-    """Ensure every column has a dq_config entry (mirrors Streamlit per-row init)."""
-    for col in sess.df.columns:
+    """Ensure every in-scope column has a dq_config entry."""
+    for col in scoped_columns(sess):
         if col not in sess.dq_config:
             sess.dq_config[col] = default_config()
 
@@ -109,10 +109,13 @@ class CrossFieldFixBody(BaseModel):
 
 @router.get("/columns")
 def list_columns(sess: SessionData = Depends(require_dataframe)) -> List[Dict[str, Any]]:
-    """List columns with sample values + their current dq_config entries."""
+    """List columns with sample values + their current dq_config entries.
+
+    Only returns columns the user has flagged as in-scope on Load Data.
+    """
     _ensure_config(sess)
     out = []
-    for col in sess.df.columns:
+    for col in scoped_columns(sess):
         sample_vals = sess.df[col].dropna().astype(str).head(5).tolist()
         sample_str = ", ".join(sample_vals[:5]) if sample_vals else "No data"
         if len(sample_str) > 80:
@@ -247,7 +250,7 @@ def undo(sess: SessionData = Depends(require_dataframe)) -> dict:
 @router.post("/enable-all")
 def enable_all(sess: SessionData = Depends(require_dataframe)) -> dict:
     _ensure_config(sess)
-    for col in sess.df.columns:
+    for col in scoped_columns(sess):
         sess.dq_config[col]["enabled"] = True
     return {"ok": True}
 
@@ -255,7 +258,7 @@ def enable_all(sess: SessionData = Depends(require_dataframe)) -> dict:
 @router.post("/disable-all")
 def disable_all(sess: SessionData = Depends(require_dataframe)) -> dict:
     _ensure_config(sess)
-    for col in sess.df.columns:
+    for col in scoped_columns(sess):
         sess.dq_config[col]["enabled"] = False
     return {"ok": True}
 
@@ -263,7 +266,7 @@ def disable_all(sess: SessionData = Depends(require_dataframe)) -> dict:
 @router.post("/clear-rules")
 def clear_rules(sess: SessionData = Depends(require_dataframe)) -> dict:
     _ensure_config(sess)
-    for col in sess.df.columns:
+    for col in scoped_columns(sess):
         sess.dq_config[col]["applied_rules"] = []
     return {"ok": True}
 

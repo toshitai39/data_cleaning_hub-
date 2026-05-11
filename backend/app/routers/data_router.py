@@ -513,7 +513,63 @@ def clear_data(sess: SessionData = Depends(get_session)) -> dict:
     sess.dq_config = {}
     sess.reject_df = None
     sess.validation_history = []
+    sess.columns_of_interest = []
+    sess.semantic_glossary = None
     return {"ok": True}
+
+
+# ─── Columns of interest ──────────────────────────────────────────────
+
+
+class ColumnsOfInterestBody(BaseModel):
+    selected: List[str]
+
+
+@router.get("/columns-of-interest")
+def get_columns_of_interest(sess: SessionData = Depends(require_dataframe)) -> dict:
+    """Return the full column list plus the user's current selection.
+
+    If no explicit selection has been stored yet, ``selected`` echoes back the
+    full column list so the UI shows "everything is in scope" by default.
+    """
+    all_cols = [str(c) for c in sess.df.columns]
+    stored = [c for c in sess.columns_of_interest if c in all_cols]
+    return {
+        "all": all_cols,
+        "selected": stored if stored else all_cols,
+        "explicit": bool(sess.columns_of_interest),
+    }
+
+
+@router.post("/columns-of-interest")
+def set_columns_of_interest(
+    body: ColumnsOfInterestBody,
+    sess: SessionData = Depends(require_dataframe),
+) -> dict:
+    """Persist the user's selection of columns-of-interest for this session."""
+    all_cols = {str(c) for c in sess.df.columns}
+    unknown = [c for c in body.selected if c not in all_cols]
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown columns: {', '.join(unknown[:5])}",
+        )
+    selected_set = set(body.selected)
+    previous = list(sess.columns_of_interest)
+    sess.columns_of_interest = [str(c) for c in sess.df.columns if str(c) in selected_set]
+    # Selection drives every downstream analytical step (profiling, AI rules,
+    # quality apply). When scope changes, those caches become stale — drop
+    # them so the user re-runs against the new scope explicitly.
+    if previous != sess.columns_of_interest:
+        sess.column_profiles = {}
+        sess.quality_report = None
+        sess.ai_validation_rules = None
+        sess.semantic_glossary = None
+    return {
+        "ok": True,
+        "selected": sess.columns_of_interest,
+        "count": len(sess.columns_of_interest),
+    }
 
 
 # ─── Database connector ───────────────────────────────────────────────

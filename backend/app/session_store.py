@@ -40,6 +40,15 @@ class SessionData:
     dq_config: Dict[str, Any] = field(default_factory=dict)
     reject_df: Optional[pd.DataFrame] = None
     validation_history: List[Dict[str, Any]] = field(default_factory=list)
+    # Columns the user has flagged as "of interest" — downstream tabs (profiling,
+    # rule generator, quality) may restrict their work to these. Empty list means
+    # "no explicit selection yet → treat all dataset columns as in-scope".
+    columns_of_interest: List[str] = field(default_factory=list)
+    # AI-inferred semantic-type glossary keyed by column name. Each entry has
+    # ``semantic_type``, ``display_name``, ``description``, ``format_hint``,
+    # ``confidence``, and ``source`` (``"ai"`` or ``"manual"``). ``None`` until
+    # the user generates it from the AI Validations tab.
+    semantic_glossary: Optional[Dict[str, Dict[str, Any]]] = None
     last_access: float = field(default_factory=time.time)
     user: Optional[Dict[str, str]] = None
 

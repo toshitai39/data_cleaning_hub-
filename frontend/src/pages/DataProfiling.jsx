@@ -79,7 +79,7 @@ export default function DataProfiling() {
             <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto">
               <Tab label="Overview" />
               <Tab label="Column Profiles" />
-              <Tab label="AI Validations" />
+              <Tab label="Data Glossary" />
               <Tab label="Data Drift" />
               <Tab label="Match Rules" />
               <Tab label="Export" />

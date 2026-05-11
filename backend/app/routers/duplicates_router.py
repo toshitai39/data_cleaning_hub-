@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ..deps import require_dataframe
+from ..deps import require_dataframe, scoped_columns
 from ..services.duplicates_engine import (
     export_groups_to_excel,
     find_group,
@@ -75,8 +75,13 @@ class ExportSelectedBody(BaseModel):
 
 @router.get("/columns")
 def list_columns(sess: SessionData = Depends(require_dataframe)) -> dict:
-    """Return all columns + object-only columns (for fuzzy/combined dropdowns)."""
-    df = sess.df
+    """Return columns + object-only columns (for fuzzy/combined dropdowns).
+
+    Restricted to the user's Columns of interest selection so the duplicate
+    detection UI only offers in-scope columns.
+    """
+    in_scope = set(scoped_columns(sess))
+    df = sess.df[[c for c in sess.df.columns if str(c) in in_scope]]
     return {
         "all": list(df.columns.astype(str)),
         "object_only": list(df.select_dtypes(include=["object"]).columns.astype(str)),

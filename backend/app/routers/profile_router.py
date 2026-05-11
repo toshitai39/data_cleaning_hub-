@@ -39,7 +39,7 @@ from core.drift_detector import (
 )
 from core.profiler import DataProfilerEngine
 
-from ..deps import require_dataframe
+from ..deps import require_dataframe, scoped_dataframe
 from ..services.ai_validation_engine import (
     AIValidationEngine,
     DynamicValidationDetector,
@@ -53,6 +53,7 @@ from ..services.match_rules import (
 )
 from ..services.dashboard import collect_risk_counts, collect_top_issues
 from ..services.profile_export import build_excel_report, build_json_report
+from ..services.semantic_glossary import generate_semantic_glossary
 from ..session_store import SessionData
 
 router = APIRouter(prefix="/profile", tags=["profile"])
@@ -62,7 +63,8 @@ router = APIRouter(prefix="/profile", tags=["profile"])
 
 def _ensure_profiles(sess: SessionData) -> Dict[str, Any]:
     if not sess.column_profiles:
-        engine = DataProfilerEngine(sess.df, sess.filename)
+        df = scoped_dataframe(sess)
+        engine = DataProfilerEngine(df, sess.filename)
         engine.profile(fast_mode=True)
         sess.column_profiles = dict(engine.column_profiles)
         sess.quality_report = engine.quality_report
@@ -98,7 +100,7 @@ def _profile_df(df: pd.DataFrame, profiles: Dict[str, Any]) -> pd.DataFrame:
 @router.post("/run")
 def run_profile(sess: SessionData = Depends(require_dataframe)) -> dict:
     """Run profiler and persist column_profiles + quality_report on session."""
-    df = sess.df
+    df = scoped_dataframe(sess)
     engine = DataProfilerEngine(df, sess.filename)
     try:
         engine.profile(fast_mode=True)
@@ -132,7 +134,7 @@ def dashboard(sess: SessionData = Depends(require_dataframe)) -> dict:
     Safe to call before /profile/run — falls back gracefully when profiles
     haven't been computed yet.
     """
-    df = sess.df
+    df = scoped_dataframe(sess)
     profiles = sess.column_profiles  # may be empty
     quality_report = sess.quality_report
 
@@ -196,7 +198,7 @@ def dashboard(sess: SessionData = Depends(require_dataframe)) -> dict:
 
 @router.get("/kpi")
 def kpi(sess: SessionData = Depends(require_dataframe)) -> dict:
-    df = sess.df
+    df = scoped_dataframe(sess)
     profiles = _ensure_profiles(sess)
     total_rows = len(df)
     total_cols = len(df.columns)
@@ -229,7 +231,7 @@ def kpi(sess: SessionData = Depends(require_dataframe)) -> dict:
 
 @router.get("/overview")
 def overview(sess: SessionData = Depends(require_dataframe)) -> dict:
-    df = sess.df
+    df = scoped_dataframe(sess)
     profiles = _ensure_profiles(sess)
     pdf = _profile_df(df, profiles)
 
@@ -300,7 +302,7 @@ def overview(sess: SessionData = Depends(require_dataframe)) -> dict:
 @router.get("/correlation")
 def correlation(method: str = Query("pearson", regex="^(pearson|spearman)$"),
                 sess: SessionData = Depends(require_dataframe)) -> dict:
-    df = sess.df
+    df = scoped_dataframe(sess)
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     if len(numeric_cols) < 2:
         return {"columns": [], "matrix": [], "high_pairs": []}
@@ -321,7 +323,7 @@ def correlation(method: str = Query("pearson", regex="^(pearson|spearman)$"),
 
 @router.get("/columns")
 def columns(sess: SessionData = Depends(require_dataframe)) -> List[Dict[str, Any]]:
-    df = sess.df
+    df = scoped_dataframe(sess)
     profiles = _ensure_profiles(sess)
     out: List[Dict[str, Any]] = []
     for col, p in profiles.items():
@@ -355,7 +357,7 @@ def columns(sess: SessionData = Depends(require_dataframe)) -> List[Dict[str, An
 @router.post("/match-rules")
 def match_rules_endpoint(sess: SessionData = Depends(require_dataframe)) -> List[Dict[str, Any]]:
     profiles = _ensure_profiles(sess)
-    return generate_match_rules(sess.df, profiles)
+    return generate_match_rules(scoped_dataframe(sess), profiles)
 
 
 # ---------- AI Rules -----------------------------------------------------
@@ -389,7 +391,7 @@ def ai_rules_generate(sess: SessionData = Depends(require_dataframe)) -> dict:
         progress_log.append(payload)
 
     unified_df = detector.generate_comprehensive_dq_rules(
-        sess.df, profiles, file_path=file_path, sheet_name=sheet_name,
+        scoped_dataframe(sess), profiles, file_path=file_path, sheet_name=sheet_name,
         progress_cb=cb,
     )
     sess.ai_validation_rules = unified_df
@@ -428,7 +430,7 @@ def ai_rules_clear(sess: SessionData = Depends(require_dataframe)) -> dict:
 def export_excel(sess: SessionData = Depends(require_dataframe)):
     profiles = _ensure_profiles(sess)
     unified = sess.ai_validation_rules if isinstance(sess.ai_validation_rules, pd.DataFrame) else None
-    data, fname = build_excel_report(sess.df, profiles, sess.filename, unified)
+    data, fname = build_excel_report(scoped_dataframe(sess), profiles, sess.filename, unified)
     return StreamingResponse(
         io.BytesIO(data),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -439,7 +441,7 @@ def export_excel(sess: SessionData = Depends(require_dataframe)):
 @router.post("/export/json")
 def export_json(sess: SessionData = Depends(require_dataframe)):
     profiles = _ensure_profiles(sess)
-    data, fname = build_json_report(sess.df, profiles, sess.filename)
+    data, fname = build_json_report(scoped_dataframe(sess), profiles, sess.filename)
     return StreamingResponse(
         io.BytesIO(data),
         media_type="application/json",
@@ -465,7 +467,7 @@ def drift_save(body: SaveBaselineBody, sess: SessionData = Depends(require_dataf
     profiles = _ensure_profiles(sess)
     if not body.name.strip():
         raise HTTPException(status_code=400, detail="Baseline name required")
-    _save_baseline(body.name, sess.df, profiles)
+    _save_baseline(body.name, scoped_dataframe(sess), profiles)
     return {"ok": True, "name": body.name}
 
 
@@ -489,3 +491,110 @@ def drift_detect(body: DetectDriftBody,
         raise HTTPException(status_code=404, detail="Baseline not found")
     return _detect_drift(sess.df, profiles, baseline,
                           body.null_threshold, body.unique_threshold, body.mean_std_threshold)
+
+
+# ---------- Semantic glossary --------------------------------------------
+
+
+class GlossaryOverrideBody(BaseModel):
+    semantic_type: Optional[str] = None
+    display_name: Optional[str] = None
+    description: Optional[str] = None
+    format_hint: Optional[str] = None
+
+
+def _build_glossary_client():
+    from openai import AzureOpenAI
+    return AzureOpenAI(
+        api_version=AzureOpenAIConfig.AZURE_OPENAI_API_VERSION,
+        azure_endpoint=AzureOpenAIConfig.AZURE_OPENAI_ENDPOINT,
+        api_key=AzureOpenAIConfig.AZURE_OPENAI_KEY,
+    )
+
+
+@router.post("/semantic-glossary/generate")
+def semantic_glossary_generate(sess: SessionData = Depends(require_dataframe)) -> dict:
+    """Run one batched LLM call to infer a semantic type for every in-scope column."""
+    missing = AzureOpenAIConfig.validate()
+    if missing:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Azure OpenAI not configured. Missing: {', '.join(missing)}",
+        )
+
+    df = scoped_dataframe(sess)
+    if df is None or df.shape[1] == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="No columns are in scope. Select at least one column under 'Columns of interest' on Load Data.",
+        )
+
+    try:
+        client = _build_glossary_client()
+        glossary = generate_semantic_glossary(
+            df, client, AzureOpenAIConfig.AZURE_OPENAI_DEPLOYMENT,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Glossary generation failed: {exc}")
+
+    sess.semantic_glossary = glossary
+    return {
+        "ok": True,
+        "columns_in_scope": int(df.shape[1]),
+        "entries": [glossary[c] for c in df.columns if c in glossary],
+    }
+
+
+@router.get("/semantic-glossary")
+def semantic_glossary_get(sess: SessionData = Depends(require_dataframe)) -> dict:
+    """Return the stored glossary (or an empty one if not yet generated)."""
+    if not sess.semantic_glossary:
+        return {"generated": False, "entries": []}
+    df = sess.df
+    cols_in_df = [str(c) for c in df.columns] if df is not None else []
+    ordered = [
+        sess.semantic_glossary[c]
+        for c in cols_in_df
+        if c in sess.semantic_glossary
+    ]
+    return {"generated": True, "entries": ordered}
+
+
+@router.put("/semantic-glossary/{column}")
+def semantic_glossary_override(
+    column: str,
+    body: GlossaryOverrideBody,
+    sess: SessionData = Depends(require_dataframe),
+) -> dict:
+    """Apply a manual override for a single column's glossary entry."""
+    if sess.df is None or column not in [str(c) for c in sess.df.columns]:
+        raise HTTPException(status_code=404, detail=f"Unknown column: {column}")
+
+    glossary = sess.semantic_glossary or {}
+    entry = dict(glossary.get(column, {
+        "column": column,
+        "semantic_type": "unknown",
+        "display_name": column,
+        "description": "",
+        "format_hint": "",
+        "confidence": 0.0,
+        "source": "ai",
+    }))
+
+    for field_name, value in body.dict(exclude_none=True).items():
+        entry[field_name] = value.strip() if isinstance(value, str) else value
+    entry["source"] = "manual"
+    entry["confidence"] = 1.0  # explicit user override
+
+    glossary[column] = entry
+    sess.semantic_glossary = glossary
+    # Manual override invalidates dependent caches that may have used the
+    # previous semantic type when generating rules.
+    sess.ai_validation_rules = None
+    return {"ok": True, "entry": entry}
+
+
+@router.post("/semantic-glossary/clear")
+def semantic_glossary_clear(sess: SessionData = Depends(require_dataframe)) -> dict:
+    sess.semantic_glossary = None
+    return {"ok": True}

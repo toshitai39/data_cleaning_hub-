@@ -834,6 +834,19 @@ def generate_comprehensive_ai_prompt(column_name: str, sample_data: List[str], d
             )
         if metadata.get('conditional_rule'):
             metadata_lines.append(f"- Conditional Rule: {metadata['conditional_rule']}")
+        # Semantic glossary hints (filled in by the rule_generator service
+        # when the user has generated a glossary on the AI Validations tab).
+        # These steer the LLM toward type-aware rules — e.g. when
+        # ``semantic_type`` is ``"email"`` it should emit the standard email
+        # regex for the Validity rule.
+        if metadata.get('semantic_type'):
+            metadata_lines.append(f"- Semantic Type: {metadata['semantic_type']}")
+        if metadata.get('semantic_display_name'):
+            metadata_lines.append(f"- Semantic Display Name: {metadata['semantic_display_name']}")
+        if metadata.get('semantic_description'):
+            metadata_lines.append(f"- Semantic Description: {metadata['semantic_description']}")
+        if metadata.get('semantic_format_hint'):
+            metadata_lines.append(f"- Format Hint (from glossary): {metadata['semantic_format_hint']}")
     metadata_block = "\n".join(metadata_lines) if metadata_lines else "(none extracted)"
 
     rule_source_block = (
@@ -961,37 +974,51 @@ HOW TO THINK ABOUT THIS
 Read the column list once, top-down, and ask:
 
 1. Which columns together IDENTIFY a record? (composite uniqueness)
-   Look for combinations that should be unique together — typically a
-   business name plus its country and entity type, or an order number
-   plus a line number, etc. If two records share that tuple, they are
-   likely duplicates.
+   Prefer THREE-COLUMN tuples — they are stronger and more meaningful
+   than 2-column tuples. A business name alone is too coarse; name +
+   country + entity_type is the canonical customer-master key. Order
+   number + line_number + fiscal_year, patient_id + visit_date + visit_type,
+   etc. Always look for the FULL tuple, not the minimal one.
 
 2. Which columns are PRESENT-OR-ABSENT depending on another column?
    Look for fields that only make sense for some values of another field
    — e.g. a tax-registration number required only for certain countries,
-   or a discharge date required only when status = 'closed'.
+   or a discharge date required only when status = 'closed'. These often
+   involve THREE columns: a target, a context, and a discriminator
+   ("vat_no required when country is EU AND entity_type is Corporation").
 
 3. Which columns DERIVE FROM another column?
    Look for prefixes, country codes, dialing codes, currency-from-locale,
    etc. A field that always begins with the value of another field, or is
-   determined by a lookup from it.
+   determined by a lookup from it. Don't stop at one pairwise rule — if
+   country drives vat_no AND currency, propose both, or a single
+   three-column rule.
 
 4. Which columns satisfy ARITHMETIC identities?
-   Net + tax = gross. Quantity × unit price = line total. Start + duration
-   = end. Look at numeric columns whose names suggest a calculation.
+   THREE OR FOUR COLUMNS is the norm here: net + tax = gross, quantity ×
+   unit_price = line_total, start_date + duration = end_date, opening +
+   debits − credits = closing. Always include every column in the
+   identity, not just the two most obvious ones.
 
 5. Which columns must REFERENCE THE SAME CONCEPT consistently?
-   A country and a currency. A state and a country. A category and a
-   sub-category. Mismatches indicate dirty data.
+   A country and a currency. A state and a country and a country code.
+   A category and a sub-category and a top-level group. These chains are
+   usually 3+ columns deep — chase the full chain.
 
 6. Which columns have CONDITIONAL VALUES derived from another?
    "entity_type = LLP whenever company_type = LIMITED_LIABILITY_PARTNERSHIP".
+   Often extends to a third column: "AND legal_status must be ACTIVE".
 
 OUTPUT REQUIREMENTS
 -------------------
 - 0 to 10 cross-field rules total. Quality over quantity. One strong rule
   is better than three weak ones.
 - Every rule MUST involve two or more columns from the dataset.
+- STRONGLY PREFER 3+ column rules when the relationship genuinely spans
+  three columns. Do not artificially split a 3-column composite-uniqueness
+  rule into multiple 2-column rules — that loses information. Likewise,
+  do not artificially merge unrelated 2-column rules into one 3-column
+  rule.
 - Use EXACT column names from the list above. Do not invent columns.
 - Use specifics drawn from sample values where possible — a literal value
   list, a country code, a numeric tolerance. Avoid generic phrasings like
@@ -1035,8 +1062,12 @@ DATASET COLUMNS:
       "columns": ["vat_no", "country"]
     }},
     {{
-      "data_quality_rule": "vat_no must be present when country is in [DE, FR, IT, ES, NL, GB]",
-      "columns": ["vat_no", "country"]
+      "data_quality_rule": "vat_no must be present when country is in [DE, FR, IT, ES, NL, GB] AND entity_type is 'Corporation'",
+      "columns": ["vat_no", "country", "entity_type"]
+    }},
+    {{
+      "data_quality_rule": "currency must equal EUR when country is in [DE, FR, IT, ES, NL] AND entity_type is 'Corporation' (Eurozone corporate accounts)",
+      "columns": ["currency", "country", "entity_type"]
     }},
     {{
       "data_quality_rule": "gross_amount must equal net_amount + tax_amount within a tolerance of 0.01 in the same currency",
@@ -1044,6 +1075,11 @@ DATASET COLUMNS:
     }}
   ]
 }}
+
+Note in the example above: out of 5 rules, 4 of them involve 3+ columns.
+That ratio (most rules being 3+ columns) is what we want for a real dataset
+when the relationships genuinely span 3+ columns. Don't force it when only
+2 columns relate, but don't artificially limit yourself to pairs either.
 """
 
 
