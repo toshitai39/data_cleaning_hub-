@@ -52,9 +52,9 @@ function DiffPanel({ title, accent, columns, rows, side, isFlagged }) {
         <Table size="small" stickyHeader>
           <TableHead>
             <TableRow>
-              <TableCell sx={{ fontWeight: 600, bgcolor: '#f1f5f9', width: 60 }}>Row</TableCell>
+              <TableCell sx={{ fontWeight: 600, bgcolor: '#FBFAFC', width: 60 }}>Row</TableCell>
               {columns.map((c) => (
-                <TableCell key={c} sx={{ fontWeight: 600, bgcolor: '#f1f5f9' }}>{c}</TableCell>
+                <TableCell key={c} sx={{ fontWeight: 600, bgcolor: '#FBFAFC' }}>{c}</TableCell>
               ))}
             </TableRow>
           </TableHead>

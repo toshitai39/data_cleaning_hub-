@@ -25,6 +25,11 @@ from core.rule_library import (
 
 from ..deps import require_dataframe, scoped_columns
 from ..services.azure_openai_config import AzureOpenAIConfig
+from ..services.project_storage import (
+    save_dq_config as _save_dq_config,
+    save_rejected as _save_rejected,
+    save_working as _save_working,
+)
 from ..services.cross_field_engine import (
     evaluate_cross_field_rule,
     make_azure_translator,
@@ -152,6 +157,7 @@ def update_config(column: str, patch: ColumnConfigPatch,
     cfg = sess.dq_config[column]
     for k, v in patch.dict(exclude_none=True).items():
         cfg[k] = v
+    _persist_dq_config(sess)
     return {"ok": True, "config": cfg}
 
 
@@ -176,6 +182,7 @@ def save_rule(column: str, sess: SessionData = Depends(require_dataframe)) -> di
         "timestamp": datetime.now().strftime("%H:%M:%S"),
     }
     cfg["applied_rules"].append(rule)
+    _persist_dq_config(sess)
     return {"ok": True, "rule": rule, "rule_count": len(cfg["applied_rules"])}
 
 
@@ -187,6 +194,7 @@ def delete_applied_rule(column: str, rule_idx: int,
     if not cfg or rule_idx < 0 or rule_idx >= len(cfg["applied_rules"]):
         raise HTTPException(status_code=404, detail="Rule not found")
     removed = cfg["applied_rules"].pop(rule_idx)
+    _persist_dq_config(sess)
     return {"ok": True, "removed": removed}
 
 
@@ -208,6 +216,7 @@ def edit_applied_rule(column: str, rule_idx: int,
     cfg["max_length"] = rule.get("max_length", 50)
     cfg["exact_length"] = rule.get("exact_length", 10)
     cfg["applied_rules"].pop(rule_idx)
+    _persist_dq_config(sess)
     return {"ok": True, "config": cfg}
 
 
@@ -223,18 +232,45 @@ def preview(body: PreviewBody, sess: SessionData = Depends(require_dataframe)) -
     return {"rows": rows}
 
 
+def _persist_working(sess: SessionData) -> None:
+    """Snapshot the in-memory working DataFrame to disk if a project is
+    active. No-op otherwise (legacy session-only flow stays working)."""
+    if sess.active_project_id and sess.df is not None:
+        _save_working(sess.active_project_id, sess.df, sess.original_df)
+
+
+def _persist_dq_config(sess: SessionData) -> None:
+    if sess.active_project_id:
+        _save_dq_config(sess.active_project_id, sess.dq_config)
+
+
+def _persist_rejected(sess: SessionData) -> None:
+    if sess.active_project_id:
+        _save_rejected(sess.active_project_id, sess.reject_df)
+
+
+def _persist_cleansing_state(sess: SessionData) -> None:
+    """Snapshot every Cleansing-touched artifact in one call."""
+    _persist_working(sess)
+    _persist_dq_config(sess)
+    _persist_rejected(sess)
+
+
 @router.post("/apply-column/{column}")
 def apply_column(column: str, sess: SessionData = Depends(require_dataframe)) -> dict:
     if column not in sess.dq_config:
         raise HTTPException(status_code=404, detail="Column not found")
     applied, rejected = _apply_col(sess, column)
+    _persist_cleansing_state(sess)
     return {"ok": True, "applied": applied, "rejected": rejected, "rows_remaining": len(sess.df)}
 
 
 @router.post("/apply-all")
 def apply_all(sess: SessionData = Depends(require_dataframe)) -> dict:
     _ensure_config(sess)
-    return _apply_all(sess)
+    result = _apply_all(sess)
+    _persist_cleansing_state(sess)
+    return result
 
 
 @router.post("/undo")
@@ -242,6 +278,7 @@ def undo(sess: SessionData = Depends(require_dataframe)) -> dict:
     ok = _undo_last(sess)
     if not ok:
         raise HTTPException(status_code=400, detail="Nothing to undo")
+    _persist_cleansing_state(sess)
     return {"ok": True, "rows": len(sess.df)}
 
 
@@ -252,6 +289,7 @@ def enable_all(sess: SessionData = Depends(require_dataframe)) -> dict:
     _ensure_config(sess)
     for col in scoped_columns(sess):
         sess.dq_config[col]["enabled"] = True
+    _persist_dq_config(sess)
     return {"ok": True}
 
 
@@ -260,6 +298,7 @@ def disable_all(sess: SessionData = Depends(require_dataframe)) -> dict:
     _ensure_config(sess)
     for col in scoped_columns(sess):
         sess.dq_config[col]["enabled"] = False
+    _persist_dq_config(sess)
     return {"ok": True}
 
 
@@ -268,6 +307,7 @@ def clear_rules(sess: SessionData = Depends(require_dataframe)) -> dict:
     _ensure_config(sess)
     for col in scoped_columns(sess):
         sess.dq_config[col]["applied_rules"] = []
+    _persist_dq_config(sess)
     return {"ok": True}
 
 
@@ -657,6 +697,10 @@ def fix_cross_field(
         "rows_dropped": dropped,
         "timestamp": datetime.now().isoformat(),
     })
+
+    # Persist the mutation so a server restart (or another tab reading
+    # /projects/{id}) sees the dropped rows immediately.
+    _persist_working(sess)
 
     return {
         "ok": True,

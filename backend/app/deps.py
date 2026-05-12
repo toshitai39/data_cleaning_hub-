@@ -4,8 +4,11 @@ from __future__ import annotations
 from typing import List, Optional
 
 import pandas as pd
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
+from sqlalchemy.orm import Session
 
+from .db import get_db
+from .models import Project
 from .session_store import SessionData, resolve_session_id, store
 
 
@@ -35,6 +38,38 @@ def scoped_columns(sess: SessionData) -> List[str]:
         return all_cols
     selected = set(sess.columns_of_interest)
     return [c for c in all_cols if c in selected]
+
+
+def require_active_project(
+    sess: SessionData = Depends(get_session),
+    db: Session = Depends(get_db),
+) -> Project:
+    """Resolve the user's active project, 400 if there isn't one.
+
+    Use this on data-mutation endpoints so the user can't accidentally
+    write into the wrong project. Cross-user access is impossible because
+    the lookup is keyed on ``(project_id, user_username)``.
+    """
+    if not sess.user or not sess.user.get("username"):
+        raise HTTPException(status_code=401, detail="Not signed in")
+    if not sess.active_project_id:
+        raise HTTPException(
+            status_code=400,
+            detail="No active project. Pick one from Home or create a new analysis.",
+        )
+    project = (
+        db.query(Project)
+        .filter(
+            Project.id == sess.active_project_id,
+            Project.user_username == sess.user["username"],
+        )
+        .one_or_none()
+    )
+    if not project:
+        # Stale binding — session points at a project the user no longer owns.
+        sess.active_project_id = None
+        raise HTTPException(status_code=400, detail="Active project no longer exists.")
+    return project
 
 
 def scoped_dataframe(sess: SessionData) -> pd.DataFrame:

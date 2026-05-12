@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from auth.logic import add_user, authenticate
@@ -36,6 +36,24 @@ def login(body: LoginRequest) -> LoginResponse:
 def logout(session_id: str) -> dict:
     store.reset(session_id)
     return {"ok": True}
+
+
+@router.get("/me")
+def me(x_session_id: str = Header(default="")) -> dict:
+    """Return the user for the current session, or 401 if the session has
+    no user attached (typical after a backend restart — the in-memory
+    store loses everything, so the frontend needs to send the user back
+    to the login screen instead of pretending to still be signed in).
+    """
+    if not x_session_id:
+        raise HTTPException(status_code=401, detail="No session")
+    sess = store.get(x_session_id)
+    if not sess.user or not sess.user.get("username"):
+        raise HTTPException(status_code=401, detail="Not signed in")
+    return {
+        "username": sess.user["username"],
+        "name": sess.user.get("name", sess.user["username"]),
+    }
 
 
 # ---------- /register -----------------------------------------------------

@@ -16,6 +16,7 @@ import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import api from '../api.js';
 import PageHeader from '../components/PageHeader.jsx';
+import ActionButton from '../components/ActionButton.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import { useDataset } from '../context/DatasetContext.jsx';
 
@@ -34,26 +35,46 @@ const dimensionStyle = (dim) => DIMENSION_PALETTE[dim] || DIMENSION_FALLBACK;
 
 function MetricCard({ label, value, denominator, hint }) {
   return (
-    <Paper sx={{ p: 2.5, textAlign: 'center', borderRadius: 2.5 }}>
-      <Typography variant="caption" sx={{
-        color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 500,
-      }}>{label}</Typography>
-      <Typography sx={{ fontSize: '1.8rem', fontWeight: 700, color: 'primary.main', mt: 0.75, lineHeight: 1.1 }}>
+    <Box sx={{
+      bgcolor: '#FBFAFC',
+      border: '1px solid #E7E6E6',
+      borderRadius: 1.5,
+      px: 2.25,
+      py: 2,
+    }}>
+      <Typography sx={{
+        fontFamily: "'Open Sans', sans-serif",
+        fontSize: 11,
+        fontWeight: 700,
+        letterSpacing: '0.1em',
+        color: '#8A8A8A',
+        textTransform: 'uppercase',
+        mb: 0.75,
+      }}>
+        {label}
+      </Typography>
+      <Typography sx={{
+        fontFamily: "'Montserrat', sans-serif",
+        fontSize: 26,
+        fontWeight: 700,
+        color: '#1A1A1A',
+        lineHeight: 1,
+      }}>
         {value}
         {denominator !== undefined && (
           <Typography component="span" sx={{
-            fontSize: '1.05rem', fontWeight: 500, color: 'text.secondary', ml: 0.5,
+            fontSize: 15, fontWeight: 500, color: '#8A8A8A', ml: 0.5,
           }}>
             / {denominator}
           </Typography>
         )}
       </Typography>
       {hint && (
-        <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block', mt: 0.25 }}>
+        <Typography sx={{ fontSize: 12, color: '#8A8A8A', mt: 0.75 }}>
           {hint}
         </Typography>
       )}
-    </Paper>
+    </Box>
   );
 }
 
@@ -293,45 +314,61 @@ AZURE_OPENAI_MAX_RPM=60`}
         </Alert>
       )}
 
-      <Grid container spacing={2} sx={{ mb: 2 }}>
+      <Grid container spacing={1.5} sx={{ mb: 2.5 }}>
         <Grid item xs={12} md={3}>
           {!generated ? (
-            <Button fullWidth size="large" variant="contained" startIcon={<AutoAwesomeIcon />}
-              onClick={generate} disabled={busy}>
-              {busy ? 'Analyzing data with comprehensive engine…' : 'Generate AI Validation Rules'}
+            <Button
+              fullWidth
+              variant="contained"
+              startIcon={<AutoAwesomeIcon />}
+              onClick={generate}
+              disabled={busy}
+              sx={{ py: 1.25, fontSize: 14, fontWeight: 700 }}
+            >
+              {busy ? 'Analyzing…' : 'Generate Rules'}
             </Button>
           ) : (
-            <Alert severity="success" sx={{ height: '100%' }}>Rules Generated</Alert>
+            <ActionButton tone="success" startIcon={<CheckCircleOutlineIcon />} disabled>
+              Rules Generated
+            </ActionButton>
           )}
         </Grid>
         <Grid item xs={12} md={3}>
-          <Button fullWidth size="large" variant="outlined" startIcon={<AddCircleOutlineIcon />}
-            onClick={openCustom} disabled={busy || !state.loaded}>
+          <ActionButton
+            startIcon={<AddCircleOutlineIcon />}
+            onClick={openCustom}
+            disabled={busy || !state.loaded}
+          >
             Add Custom Rule
-          </Button>
+          </ActionButton>
         </Grid>
         <Grid item xs={12} md={3}>
-          {generated && (
-            <Button fullWidth size="large" variant="outlined" startIcon={<RefreshIcon />}
-              onClick={regenerate} disabled={busy}>Regenerate Rules</Button>
-          )}
+          <ActionButton
+            startIcon={<RefreshIcon />}
+            onClick={regenerate}
+            disabled={busy || !generated}
+          >
+            Regenerate Rules
+          </ActionButton>
         </Grid>
         <Grid item xs={12} md={3}>
-          {generated && (
-            <Button fullWidth size="large" variant="outlined" color="error"
-              startIcon={<DeleteIcon />} onClick={clear} disabled={busy}>Clear Rules</Button>
-          )}
+          <ActionButton
+            tone="danger"
+            startIcon={<DeleteIcon />}
+            onClick={clear}
+            disabled={busy || !generated}
+          >
+            Clear Rules
+          </ActionButton>
         </Grid>
       </Grid>
 
       {busy && <LinearProgress sx={{ mb: 2 }} />}
       {err && <Alert severity="error" sx={{ mb: 2 }}>{err}</Alert>}
 
-      <Divider sx={{ my: 2 }} />
-
       {generated && rules.length > 0 ? (
         <>
-          <Grid container spacing={2} sx={{ mb: 2 }}>
+          <Grid container spacing={1.5} sx={{ mb: 2 }}>
             <Grid item xs={4}><MetricCard label="Total Rules" value={stats.total_rules} /></Grid>
             <Grid item xs={4}><MetricCard label="Columns Covered" value={stats.columns_covered} /></Grid>
             <Grid item xs={4}>
@@ -344,15 +381,29 @@ AZURE_OPENAI_MAX_RPM=60`}
             </Grid>
           </Grid>
 
-          <Divider sx={{ my: 2 }} />
-
-          <Stack direction="row" alignItems="baseline" justifyContent="space-between" sx={{ mb: 1 }}>
-            <Typography variant="h6">Data Quality Rules</Typography>
-            <Typography variant="caption" color="text.secondary">
-              {filteredRules.length} of {rules.length} rules
-              {activeDim !== 'All' && ` · viewing ${activeDim}`}
-            </Typography>
-          </Stack>
+          <Box sx={{ borderTop: '1px solid #E7E6E6', pt: 3, mt: 3 }}>
+            <Stack
+              direction="row"
+              alignItems="baseline"
+              justifyContent="space-between"
+              sx={{ mb: 1.5 }}
+            >
+              <Typography
+                sx={{
+                  fontFamily: "'Montserrat', sans-serif",
+                  fontSize: 22,
+                  fontWeight: 700,
+                  color: '#1A1A1A',
+                }}
+              >
+                Data Quality Rules
+              </Typography>
+              <Typography sx={{ fontSize: 12, color: '#8A8A8A', fontWeight: 500 }}>
+                {filteredRules.length} of {rules.length} rules
+                {activeDim !== 'All' && ` · viewing ${activeDim}`}
+              </Typography>
+            </Stack>
+          </Box>
 
           <Box sx={{
             borderBottom: 1, borderColor: 'divider', mb: 1.5,
@@ -436,22 +487,19 @@ AZURE_OPENAI_MAX_RPM=60`}
           >
             <Table stickyHeader size="small" sx={{
               '& td, & th': { borderColor: 'divider' },
-              '& tbody tr:hover': { bgcolor: 'rgba(91, 26, 120, 0.03)' },
-              '& tbody tr:nth-of-type(even)': { bgcolor: '#fafafa' },
-              '& tbody tr:nth-of-type(even):hover': { bgcolor: 'rgba(91, 26, 120, 0.04)' },
+              '& tbody tr:hover': { bgcolor: '#F7F5FA' },
             }}>
               <TableHead>
                 <TableRow sx={{
                   '& th': {
-                    bgcolor: '#f8fafc',
-                    color: 'text.secondary',
-                    fontWeight: 600,
+                    bgcolor: '#FBFAFC',
+                    color: '#8A8A8A',
+                    fontWeight: 700,
                     fontSize: '0.72rem',
-                    letterSpacing: '0.04em',
+                    letterSpacing: '0.08em',
                     textTransform: 'uppercase',
                     py: 1.25,
-                    borderBottom: '1px solid',
-                    borderColor: 'divider',
+                    borderBottom: '1px solid #E7E6E6',
                   },
                 }}>
                   <TableCell sx={{ width: 56 }}>#</TableCell>
@@ -460,7 +508,6 @@ AZURE_OPENAI_MAX_RPM=60`}
                   <TableCell sx={{ width: 110 }}>Source</TableCell>
                   <TableCell sx={{ width: 150 }}>Dimension</TableCell>
                   <TableCell>Data Quality Rule</TableCell>
-                  <TableCell>Regex Pattern</TableCell>
                   <TableCell align="right" sx={{ width: 90 }}>Issues</TableCell>
                   <TableCell sx={{ minWidth: 260 }}>Result</TableCell>
                   <TableCell sx={{ width: 56 }} />
@@ -475,8 +522,6 @@ AZURE_OPENAI_MAX_RPM=60`}
                   // executor couldn't evaluate it. Anything else means
                   // it ran and we should display real numbers.
                   const crossFieldUnevaluated = isCrossField && example.toLowerCase().includes('manual review');
-                  const validationExpr = String(r['Validation Expression'] || '');
-                  const regexCellContent = isCrossField ? validationExpr : String(r['Regex Pattern'] || '');
                   const isOk = !example || example.startsWith('All values valid');
                   const dim = dimensionStyle(r.Dimension);
                   const src = sourceChipProps(r['Rule Source']);
@@ -521,31 +566,6 @@ AZURE_OPENAI_MAX_RPM=60`}
                         </Box>
                       </TableCell>
                       <TableCell sx={{ color: 'text.primary' }}>{r['Data Quality Rule']}</TableCell>
-                      <TableCell sx={{ maxWidth: 220 }}>
-                        {regexCellContent ? (
-                          <Tooltip title={regexCellContent} placement="top">
-                            <Box component="code" sx={{
-                              display: 'inline-block',
-                              maxWidth: '100%',
-                              px: 0.75,
-                              py: 0.25,
-                              borderRadius: 0.75,
-                              bgcolor: '#f1f5f9',
-                              color: '#475569',
-                              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                              fontSize: '0.72rem',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                              verticalAlign: 'middle',
-                            }}>
-                              {regexCellContent}
-                            </Box>
-                          </Tooltip>
-                        ) : (
-                          <Typography variant="caption" sx={{ color: 'text.disabled' }}>—</Typography>
-                        )}
-                      </TableCell>
                       <TableCell align="right" sx={{
                         fontVariantNumeric: 'tabular-nums',
                         fontWeight: 600,
@@ -596,7 +616,7 @@ AZURE_OPENAI_MAX_RPM=60`}
                 })}
                 {filteredRules.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={9} align="center" sx={{ py: 4, color: 'text.secondary' }}>
+                    <TableCell colSpan={8} align="center" sx={{ py: 4, color: 'text.secondary' }}>
                       No {activeDim === 'All' ? '' : `${activeDim} `}rules to show.
                     </TableCell>
                   </TableRow>
@@ -676,17 +696,6 @@ AZURE_OPENAI_MAX_RPM=60`}
               multiline
               minRows={2}
             />
-
-            {customForm.dimension !== 'Cross-field Validation' && (
-              <TextField
-                size="small"
-                label="Regex pattern (optional)"
-                placeholder="^[A-Za-z0-9._%+-]+@.+\.[A-Za-z]{2,}$"
-                value={customForm.regex_pattern}
-                onChange={(e) => setCustomForm((f) => ({ ...f, regex_pattern: e.target.value }))}
-                fullWidth
-              />
-            )}
 
             {customForm.dimension === 'Cross-field Validation' && (
               <TextField

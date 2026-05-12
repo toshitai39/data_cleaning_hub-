@@ -10,6 +10,8 @@ import UndoIcon from '@mui/icons-material/Undo';
 import DownloadIcon from '@mui/icons-material/Download';
 import api from '../api.js';
 import PageHeader from '../components/PageHeader.jsx';
+import StatCard from '../components/StatCard.jsx';
+import ActionButton from '../components/ActionButton.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import { useDataset } from '../context/DatasetContext.jsx';
 import ColumnRow from './quality/ColumnRow.jsx';
@@ -139,7 +141,7 @@ export default function DataQuality() {
   if (!state.loaded) {
     return (
       <>
-        <PageHeader title="Data Quality" subtitle="Per-column rule editor with 6 modes." />
+        <PageHeader title="Cleansing" subtitle="Per-column rule editor — apply, review and reject violations." />
         <EmptyState />
       </>
     );
@@ -147,93 +149,110 @@ export default function DataQuality() {
 
   return (
     <>
-      <PageHeader title="Data Quality" />
+      <PageHeader
+        title="Cleansing"
+        subtitle="Apply rules column-by-column · review and reject violations."
+      />
       {busy && <LinearProgress sx={{ mb: 2 }} />}
       {err && <Alert severity="error" sx={{ mb: 2 }}>{err}</Alert>}
       {msg && <Alert severity="success" sx={{ mb: 2 }}>{msg}</Alert>}
 
-      {/* Top bar: Rows / Columns / Rejected / AI Regex / Apply / Undo */}
+      {/* Top row: 3 stat cards + 3 primary actions */}
       <Grid container spacing={1.5} sx={{ mb: 2 }}>
         <Grid item xs={4} md={2}>
-          <Paper sx={{ p: 1.5, textAlign: 'center' }}>
-            <Typography variant="caption" color="text.secondary">Rows</Typography>
-            <Typography variant="h6">{stats.rows.toLocaleString()}</Typography>
-          </Paper>
+          <StatCard accent label="Rows" value={stats.rows.toLocaleString()} />
         </Grid>
         <Grid item xs={4} md={2}>
-          <Paper sx={{ p: 1.5, textAlign: 'center' }}>
-            <Typography variant="caption" color="text.secondary">Columns</Typography>
-            <Typography variant="h6">{stats.columns}</Typography>
-          </Paper>
+          <StatCard label="Columns" value={stats.columns} />
         </Grid>
         <Grid item xs={4} md={2}>
-          <Paper sx={{ p: 1.5, textAlign: 'center' }}>
-            <Typography variant="caption" color="text.secondary">Rejected</Typography>
-            <Typography variant="h6">{stats.rejected.toLocaleString()}</Typography>
-          </Paper>
+          <StatCard
+            label="Rejected"
+            value={stats.rejected.toLocaleString()}
+            deltaTone={stats.rejected > 0 ? 'down' : undefined}
+          />
         </Grid>
         <Grid item xs={4} md={2}>
-          <Button fullWidth size="large" variant="outlined" startIcon={<AutoAwesomeIcon />}
-            onClick={() => setAiOpen(true)}>AI Regex</Button>
+          <ActionButton startIcon={<AutoAwesomeIcon />} onClick={() => setAiOpen(true)}>
+            AI Regex
+          </ActionButton>
         </Grid>
         <Grid item xs={4} md={2}>
-          <Button fullWidth size="large" variant="contained"
-            disabled={stats.total_rules === 0} onClick={applyAll}>
+          <Button
+            fullWidth
+            variant="contained"
+            disabled={stats.total_rules === 0}
+            onClick={applyAll}
+            sx={{ height: '100%', py: 1.25, fontSize: 14, fontWeight: 700 }}
+          >
             Apply ({stats.total_rules})
           </Button>
         </Grid>
         <Grid item xs={4} md={2}>
-          <Button fullWidth size="large" variant="outlined" startIcon={<UndoIcon />}
-            disabled={stats.history_count === 0} onClick={undo}>Undo</Button>
+          <ActionButton
+            startIcon={<UndoIcon />}
+            disabled={stats.history_count === 0}
+            onClick={undo}
+          >
+            Undo
+          </ActionButton>
         </Grid>
       </Grid>
 
       {/* Action buttons row */}
-      <Grid container spacing={1.5} sx={{ mb: 2 }}>
+      <Grid container spacing={1.5} sx={{ mb: 1.5 }}>
         <Grid item xs={6} md={3}>
-          <Button fullWidth variant="outlined" onClick={enableAll}>Enable All</Button>
+          <ActionButton onClick={enableAll}>Enable All</ActionButton>
         </Grid>
         <Grid item xs={6} md={3}>
-          <Button fullWidth variant="outlined" onClick={disableAll}>Disable All</Button>
+          <ActionButton onClick={disableAll}>Disable All</ActionButton>
         </Grid>
         <Grid item xs={6} md={3}>
-          <Button fullWidth variant="outlined" color="error" onClick={clearRules}>Clear Rules</Button>
+          <ActionButton tone="danger" onClick={clearRules}>Clear Rules</ActionButton>
         </Grid>
         <Grid item xs={6} md={3}>
-          <Button fullWidth variant="outlined" startIcon={<DownloadIcon />}
-            disabled={stats.rejected === 0} onClick={downloadRejected}>Download Rejected</Button>
+          <ActionButton
+            startIcon={<DownloadIcon />}
+            disabled={stats.rejected === 0}
+            onClick={downloadRejected}
+          >
+            Download Rejected
+          </ActionButton>
         </Grid>
       </Grid>
 
       {/* Library row */}
-      <Grid container spacing={1.5} sx={{ mb: 2 }}>
+      <Grid container spacing={1.5} sx={{ mb: 1.5 }}>
         <Grid item xs={6} md={3}>
-          <Button fullWidth variant="outlined" onClick={() => setSaveOpen(true)}>Save to Library</Button>
+          <ActionButton onClick={() => setSaveOpen(true)}>Save to Library</ActionButton>
         </Grid>
         <Grid item xs={6} md={3}>
-          <Button fullWidth variant="outlined" onClick={() => setLoadOpen(true)}>Load from Library</Button>
+          <ActionButton onClick={() => setLoadOpen(true)}>Load from Library</ActionButton>
         </Grid>
         <Grid item xs={6} md={3}>
-          <Button fullWidth variant="outlined" color="error" onClick={() => setDelOpen(true)}>
+          <ActionButton tone="danger" onClick={() => setDelOpen(true)}>
             Delete from Library
-          </Button>
+          </ActionButton>
         </Grid>
         <Grid item xs={6} md={3} />
       </Grid>
 
       {/* Import / Export rules JSON */}
-      <Grid container spacing={1.5} sx={{ mb: 2 }}>
+      <Grid container spacing={1.5} sx={{ mb: 2.5 }}>
         <Grid item xs={12} md={3}>
-          <Button fullWidth variant="outlined" startIcon={<DownloadIcon />}
-            disabled={stats.total_rules === 0 && stats.columns === 0} onClick={exportRules}>
+          <ActionButton
+            startIcon={<DownloadIcon />}
+            disabled={stats.total_rules === 0 && stats.columns === 0}
+            onClick={exportRules}
+          >
             Export Rules (JSON)
-          </Button>
+          </ActionButton>
         </Grid>
         <Grid item xs={12} md={3}>
-          <Button fullWidth variant="outlined" component="label">
+          <ActionButton component="label" startIcon={<DownloadIcon sx={{ transform: 'rotate(180deg)' }} />}>
             Import Rules
             <input type="file" hidden accept=".json" ref={importInput} onChange={importRules} />
-          </Button>
+          </ActionButton>
         </Grid>
       </Grid>
 
@@ -261,7 +280,7 @@ export default function DataQuality() {
 
       {/* Cross-field rules — separate panel because they span multiple
           columns and don't fit the per-column editor above. */}
-      <CrossFieldPanel />
+      <CrossFieldPanel onAfterFix={loadAll} />
 
       {/* History */}
       {history.length > 0 && (

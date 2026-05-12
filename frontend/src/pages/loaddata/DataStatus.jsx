@@ -1,31 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Box, Grid, Paper, Typography, Alert, Button, Divider,
+  Box, Grid, Typography, Alert, Button, Divider,
   Accordion, AccordionSummary, AccordionDetails,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   TablePagination, TextField, InputAdornment, Chip,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import SearchIcon from '@mui/icons-material/Search';
+import TableChartOutlinedIcon from '@mui/icons-material/TableChartOutlined';
+import ViewColumnOutlinedIcon from '@mui/icons-material/ViewColumnOutlined';
 import api from '../../api.js';
+import StatCard from '../../components/StatCard.jsx';
+import ContentCard from '../../components/ContentCard.jsx';
+import SectionTitle from '../../components/SectionTitle.jsx';
 import ColumnsOfInterest from './ColumnsOfInterest.jsx';
-
-function MetricCard({ label, value }) {
-  return (
-    <Paper sx={{ p: 2, textAlign: 'center' }}>
-      <Typography
-        variant="caption"
-        color="text.secondary"
-        sx={{ textTransform: 'uppercase', letterSpacing: 0.6 }}
-      >
-        {label}
-      </Typography>
-      <Typography variant="h6" sx={{ fontWeight: 700, color: 'primary.main' }}>
-        {value}
-      </Typography>
-    </Paper>
-  );
-}
 
 export default function DataStatus({ filename, onClearAll, onLoadDifferent }) {
   const [info, setInfo] = useState(null);
@@ -33,9 +21,22 @@ export default function DataStatus({ filename, onClearAll, onLoadDifferent }) {
   const [columns, setColumns] = useState([]);
   const [summary, setSummary] = useState([]);
   const [qualityScore, setQualityScore] = useState(null);
+  const [scope, setScope] = useState({ selected: 0, total: 0, explicit: false });
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
+
+  const refreshScope = () =>
+    api
+      .get('/data/columns-of-interest')
+      .then((r) =>
+        setScope({
+          selected: (r.data.selected || []).length,
+          total: (r.data.all || []).length,
+          explicit: !!r.data.explicit,
+        }),
+      )
+      .catch(() => {});
 
   useEffect(() => {
     Promise.all([
@@ -45,12 +46,15 @@ export default function DataStatus({ filename, onClearAll, onLoadDifferent }) {
         .catch(() => {}),
       api.get('/data/column-summary').then((r) => setSummary(r.data)).catch(() => {}),
       api.get('/profile/dashboard').then((r) => setQualityScore(r.data?.quality_score)).catch(() => {}),
+      refreshScope(),
     ]);
   }, []);
 
   const memoryMb = info && info.size_bytes ? (info.size_bytes / 1024 / 1024).toFixed(1) : '0.0';
   const totalRows = info?.rows || 0;
   const totalCols = info?.columns || 0;
+  const scopedCols = scope.explicit ? scope.selected : (scope.total || totalCols);
+  const scopeIsNarrowed = scope.explicit && scope.selected !== scope.total;
 
   const filteredPreview = useMemo(() => {
     if (!search.trim()) return preview;
@@ -67,59 +71,72 @@ export default function DataStatus({ filename, onClearAll, onLoadDifferent }) {
 
   return (
     <Box>
-      <Alert severity="success" sx={{ mb: 2 }}>
+      <Alert severity="success" sx={{ mb: 2.5 }}>
         <b>{filename}</b> loaded successfully
       </Alert>
 
-      <Grid container spacing={1.5} sx={{ mb: 2 }}>
+      <Grid container spacing={1.5} sx={{ mb: 2.5 }}>
         <Grid item xs={6} md={3}>
-          <MetricCard label="Rows" value={totalRows.toLocaleString()} />
+          <StatCard accent label="Rows" value={totalRows.toLocaleString()} />
         </Grid>
         <Grid item xs={6} md={3}>
-          <MetricCard label="Columns" value={totalCols} />
+          <StatCard
+            label={scopeIsNarrowed ? 'Columns in scope' : 'Columns'}
+            value={scopeIsNarrowed ? `${scopedCols} / ${totalCols}` : totalCols}
+            delta={scopeIsNarrowed ? `${totalCols - scopedCols} excluded` : undefined}
+          />
         </Grid>
         <Grid item xs={6} md={3}>
-          <MetricCard label="Memory" value={`${memoryMb} MB`} />
+          <StatCard label="Memory" value={`${memoryMb} MB`} />
         </Grid>
         <Grid item xs={6} md={3}>
-          <MetricCard
+          <StatCard
             label={qualityScore == null ? 'Status' : 'Quality score'}
-            value={qualityScore == null ? 'Ready' : `${qualityScore.toFixed(0)}/100`}
+            value={qualityScore == null ? 'Ready' : `${qualityScore.toFixed(0)} / 100`}
           />
         </Grid>
       </Grid>
 
-      <ColumnsOfInterest />
+      <ColumnsOfInterest onSaved={refreshScope} />
 
-      <Paper variant="outlined" sx={{ mb: 2, overflow: 'hidden' }}>
+      <ContentCard sx={{ p: 0, mb: 2.5, overflow: 'hidden' }}>
         <Box
           sx={{
-            px: 2,
-            py: 1.5,
+            px: 2.5,
+            py: 1.75,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             flexWrap: 'wrap',
             gap: 1.5,
-            borderBottom: '1px solid',
-            borderColor: 'divider',
-            bgcolor: 'rgba(91,26,120,0.03)',
+            borderBottom: '1px solid #E7E6E6',
+            bgcolor: '#FBFAFC',
           }}
         >
-          <Box>
-            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-              Data preview
-            </Typography>
-            <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap' }}>
-              <Chip size="small" label={`First ${preview.length} rows`} />
-              <Chip size="small" label={`${columns.length} columns`} />
-              {search && (
-                <Chip
-                  size="small"
-                  color="primary"
-                  label={`${filteredPreview.length} match${filteredPreview.length === 1 ? '' : 'es'}`}
-                />
-              )}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <TableChartOutlinedIcon sx={{ fontSize: 18, color: '#6A28A8' }} />
+            <Box>
+              <Typography
+                sx={{
+                  fontFamily: "'Montserrat', sans-serif",
+                  fontSize: 15,
+                  fontWeight: 700,
+                  color: '#1A1A1A',
+                }}
+              >
+                Data preview
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap' }}>
+                <Chip size="small" label={`First ${preview.length} rows`} variant="outlined" />
+                <Chip size="small" label={`${columns.length} columns`} variant="outlined" />
+                {search && (
+                  <Chip
+                    size="small"
+                    color="primary"
+                    label={`${filteredPreview.length} match${filteredPreview.length === 1 ? '' : 'es'}`}
+                  />
+                )}
+              </Box>
             </Box>
           </Box>
           <TextField
@@ -144,7 +161,6 @@ export default function DataStatus({ filename, onClearAll, onLoadDifferent }) {
                 <TableCell
                   sx={{
                     fontWeight: 700,
-                    bgcolor: 'rgba(91,26,120,0.06)',
                     width: 56,
                     position: 'sticky',
                     left: 0,
@@ -154,14 +170,7 @@ export default function DataStatus({ filename, onClearAll, onLoadDifferent }) {
                   #
                 </TableCell>
                 {columns.map((c) => (
-                  <TableCell
-                    key={c}
-                    sx={{
-                      fontWeight: 700,
-                      bgcolor: 'rgba(91,26,120,0.06)',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
+                  <TableCell key={c} sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
                     {c}
                   </TableCell>
                 ))}
@@ -170,7 +179,7 @@ export default function DataStatus({ filename, onClearAll, onLoadDifferent }) {
             <TableBody>
               {pagedPreview.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={columns.length + 1} align="center" sx={{ py: 4, color: 'text.secondary' }}>
+                  <TableCell colSpan={columns.length + 1} align="center" sx={{ py: 4, color: '#8A8A8A' }}>
                     No rows match the filter.
                   </TableCell>
                 </TableRow>
@@ -178,14 +187,18 @@ export default function DataStatus({ filename, onClearAll, onLoadDifferent }) {
               {pagedPreview.map((row, i) => {
                 const rowIdx = page * rowsPerPage + i;
                 return (
-                  <TableRow key={rowIdx} hover>
+                  <TableRow
+                    key={rowIdx}
+                    sx={{ '&:hover': { bgcolor: '#F7F5FA' } }}
+                  >
                     <TableCell
                       sx={{
-                        color: 'text.secondary',
+                        color: '#8A8A8A',
                         fontSize: '0.75rem',
+                        fontVariantNumeric: 'tabular-nums',
                         position: 'sticky',
                         left: 0,
-                        bgcolor: 'background.paper',
+                        bgcolor: '#FFFFFF',
                       }}
                     >
                       {rowIdx + 1}
@@ -198,13 +211,13 @@ export default function DataStatus({ filename, onClearAll, onLoadDifferent }) {
                           key={c}
                           title={display}
                           sx={{
-                            fontFamily: 'monospace',
+                            fontFamily: 'ui-monospace, Menlo, monospace',
                             fontSize: '0.78rem',
                             maxWidth: 260,
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
                             whiteSpace: 'nowrap',
-                            color: val == null || display === '' ? 'text.disabled' : 'text.primary',
+                            color: val == null || display === '' ? '#8A8A8A' : '#1A1A1A',
                           }}
                         >
                           {display === '' ? '—' : display}
@@ -225,42 +238,70 @@ export default function DataStatus({ filename, onClearAll, onLoadDifferent }) {
           rowsPerPage={rowsPerPage}
           onRowsPerPageChange={(e) => { setRowsPerPage(Number(e.target.value)); setPage(0); }}
           rowsPerPageOptions={[10, 25, 50, 100]}
+          sx={{ borderTop: '1px solid #E7E6E6' }}
         />
-      </Paper>
+      </ContentCard>
 
-      <Accordion>
-        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-          <Typography>Column summary</Typography>
-        </AccordionSummary>
-        <AccordionDetails>
-          <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 360 }}>
-            <Table size="small" stickyHeader>
-              <TableHead>
-                <TableRow>
-                  <TableCell sx={{ fontWeight: 600 }}>Column</TableCell>
-                  <TableCell sx={{ fontWeight: 600 }}>Type</TableCell>
-                  <TableCell sx={{ fontWeight: 600 }}>Non-null</TableCell>
-                  <TableCell sx={{ fontWeight: 600 }}>Null %</TableCell>
-                  <TableCell sx={{ fontWeight: 600 }}>Unique</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {summary.map((r, i) => (
-                  <TableRow key={i}>
-                    <TableCell>{r.Column}</TableCell>
-                    <TableCell>{r.Type}</TableCell>
-                    <TableCell>{r['Non-Null']}</TableCell>
-                    <TableCell>{r['Null %']}</TableCell>
-                    <TableCell>{r.Unique}</TableCell>
+      <ContentCard sx={{ p: 0, mb: 2.5 }}>
+        <Accordion
+          disableGutters
+          elevation={0}
+          sx={{
+            background: 'transparent',
+            border: 'none',
+            '&:before': { display: 'none' },
+          }}
+        >
+          <AccordionSummary
+            expandIcon={<ExpandMoreIcon />}
+            sx={{ px: 2.5, py: 1, minHeight: 56 }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <ViewColumnOutlinedIcon sx={{ fontSize: 18, color: '#6A28A8' }} />
+              <Typography
+                sx={{
+                  fontFamily: "'Montserrat', sans-serif",
+                  fontSize: 15,
+                  fontWeight: 700,
+                  color: '#1A1A1A',
+                }}
+              >
+                Column summary
+              </Typography>
+            </Box>
+          </AccordionSummary>
+          <AccordionDetails sx={{ p: 0, borderTop: '1px solid #E7E6E6' }}>
+            <TableContainer sx={{ maxHeight: 360 }}>
+              <Table size="small" stickyHeader>
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ fontWeight: 700 }}>Column</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>Type</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>Non-null</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>Null %</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>Unique</TableCell>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
-        </AccordionDetails>
-      </Accordion>
+                </TableHead>
+                <TableBody>
+                  {summary.map((r, i) => (
+                    <TableRow key={i} sx={{ '&:hover': { bgcolor: '#F7F5FA' } }}>
+                      <TableCell sx={{ fontWeight: 500 }}>{r.Column}</TableCell>
+                      <TableCell>
+                        <Chip size="small" label={r.Type} variant="outlined" />
+                      </TableCell>
+                      <TableCell>{r['Non-Null']}</TableCell>
+                      <TableCell>{r['Null %']}</TableCell>
+                      <TableCell>{r.Unique}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </AccordionDetails>
+        </Accordion>
+      </ContentCard>
 
-      <Divider sx={{ my: 2 }} />
+      <Divider sx={{ my: 2.5 }} />
       <Grid container spacing={1.5}>
         <Grid item xs={12} sm={6}>
           <Button fullWidth variant="outlined" onClick={onLoadDifferent}>Load different file</Button>

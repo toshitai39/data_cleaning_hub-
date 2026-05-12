@@ -1,0 +1,536 @@
+{
+  "version": 2,
+  "schema": {
+    "match_column": "{column, method, threshold?, aliases?}",
+    "action_class": "auto_merge | review_required | flag_only",
+    "notes": "Free-text business context shown in the dialog tooltip.",
+    "min_group_size": "Skip groups smaller than this — defaults to 2."
+  },
+  "rules": [
+    {
+      "id": "vendor-exact-tax-id",
+      "stream": "vendor",
+      "label": "Vendor — exact tax ID",
+      "description": "Two vendors with the same non-null national tax identifier are the same legal entity.",
+      "kind": "duplicate",
+      "match_strategy": "exact",
+      "match_columns": [
+        {
+          "column": "tax_id",
+          "method": "exact_non_null",
+          "aliases": ["pan_number", "pan", "vat_no", "vat_number", "gstin", "gst_number", "tin", "ein"]
+        }
+      ],
+      "survivorship": {
+        "strategy": "field_level_merge",
+        "priority": ["most_complete", "most_recent"],
+        "recency_column": "updated_at"
+      },
+      "severity": "high",
+      "action_class": "auto_merge",
+      "notes": "Tax IDs are issued one-per-entity by national authorities. Safe to auto-merge once verified.",
+      "min_group_size": 2,
+      "source": "library",
+      "version": 2
+    },
+    {
+      "id": "vendor-fuzzy-name-country",
+      "stream": "vendor",
+      "label": "Vendor — fuzzy name + exact country",
+      "description": "Normalized name fuzzy-match at ≥85% within the same country.",
+      "kind": "duplicate",
+      "match_strategy": "fuzzy",
+      "match_columns": [
+        {
+          "column": "name",
+          "method": "token_sort_ratio",
+          "threshold": 0.85,
+          "aliases": ["vendor_name", "legal_name", "company_name", "supplier_name", "trade_name"]
+        },
+        {
+          "column": "country",
+          "method": "exact",
+          "aliases": ["country_code", "ctry", "land1", "iso_country"]
+        }
+      ],
+      "survivorship": {
+        "strategy": "field_level_merge",
+        "priority": ["most_complete", "most_recent"],
+        "recency_column": "updated_at"
+      },
+      "severity": "high",
+      "action_class": "review_required",
+      "notes": "Catches \"Acme GmbH\" vs \"Acme G.m.b.H.\" within the same country. Human reviews the survivorship merge before applying.",
+      "min_group_size": 2,
+      "source": "library",
+      "version": 2
+    },
+    {
+      "id": "vendor-composite-name-country-entity",
+      "stream": "vendor",
+      "label": "Vendor — name + country + entity type (composite)",
+      "description": "Three-key composite uniqueness for vendor master. Catches duplicates that share legal form, jurisdiction, and similar name.",
+      "kind": "duplicate",
+      "match_strategy": "fuzzy",
+      "match_columns": [
+        {
+          "column": "name",
+          "method": "token_sort_ratio",
+          "threshold": 0.88,
+          "aliases": ["vendor_name", "legal_name", "company_name", "supplier_name"]
+        },
+        {
+          "column": "country",
+          "method": "exact",
+          "aliases": ["country_code", "land1", "iso_country"]
+        },
+        {
+          "column": "entity_type",
+          "method": "exact",
+          "aliases": ["legal_form", "company_type", "type_of_entity", "organisation_type"]
+        }
+      ],
+      "survivorship": {
+        "strategy": "field_level_merge",
+        "priority": ["most_complete", "most_recent"]
+      },
+      "severity": "high",
+      "action_class": "review_required",
+      "notes": "Strongest pre-emptive duplicate check for new vendor onboarding. Tightens threshold to 88% because the extra two keys already filter false positives.",
+      "min_group_size": 2,
+      "source": "library",
+      "version": 2
+    },
+    {
+      "id": "vendor-exact-bank-account",
+      "stream": "vendor",
+      "label": "Vendor — shared bank account (fraud signal)",
+      "description": "Two vendors paid into the same bank account. Often a duplicate, sometimes a fraud red flag.",
+      "kind": "duplicate",
+      "match_strategy": "exact",
+      "match_columns": [
+        {
+          "column": "bank_account_number",
+          "method": "exact_non_null",
+          "aliases": ["bankn", "iban", "account_number", "acct_no", "bank_acc"]
+        },
+        {
+          "column": "bank_code",
+          "method": "exact_non_null",
+          "aliases": ["bankl", "swift", "bic", "routing_number", "ifsc"]
+        }
+      ],
+      "survivorship": {
+        "strategy": "most_recent",
+        "recency_column": "updated_at"
+      },
+      "severity": "high",
+      "action_class": "flag_only",
+      "notes": "Don't auto-merge — this is a fraud audit signal. Forward to procurement controls for investigation, then decide whether to merge or flag.",
+      "min_group_size": 2,
+      "source": "library",
+      "version": 2
+    },
+    {
+      "id": "vendor-fuzzy-name-city",
+      "stream": "vendor",
+      "label": "Vendor — fuzzy name + same city",
+      "description": "Fallback when country is missing — group vendors operating in the same city with similar names.",
+      "kind": "duplicate",
+      "match_strategy": "fuzzy",
+      "match_columns": [
+        {
+          "column": "name",
+          "method": "token_sort_ratio",
+          "threshold": 0.85,
+          "aliases": ["vendor_name", "legal_name", "company_name"]
+        },
+        {
+          "column": "city",
+          "method": "exact",
+          "aliases": ["ort01", "town", "locality"]
+        }
+      ],
+      "survivorship": {
+        "strategy": "field_level_merge",
+        "priority": ["most_complete"]
+      },
+      "severity": "medium",
+      "action_class": "review_required",
+      "notes": "Use when country isn't reliable (single-country dataset). Higher false-positive rate than country-based — review carefully.",
+      "min_group_size": 2,
+      "source": "library",
+      "version": 2
+    },
+
+    {
+      "id": "customer-exact-gstin",
+      "stream": "customer",
+      "label": "Customer — exact GSTIN (India)",
+      "description": "Two customers sharing the same Indian GSTIN are the same legal entity in that state.",
+      "kind": "duplicate",
+      "match_strategy": "exact",
+      "match_columns": [
+        {
+          "column": "gst_number",
+          "method": "exact_non_null",
+          "aliases": ["gstin", "gst", "gst_no", "gst_in"]
+        }
+      ],
+      "survivorship": {
+        "strategy": "field_level_merge",
+        "priority": ["most_complete", "most_recent"]
+      },
+      "severity": "high",
+      "action_class": "auto_merge",
+      "notes": "GSTIN is unique per entity per state. Same GSTIN ⇒ same legal entity. Safe to auto-merge.",
+      "min_group_size": 2,
+      "source": "library",
+      "version": 2
+    },
+    {
+      "id": "customer-exact-pan",
+      "stream": "customer",
+      "label": "Customer — exact PAN (India)",
+      "description": "Two customers sharing the same PAN number are the same parent entity (possibly different states).",
+      "kind": "duplicate",
+      "match_strategy": "exact",
+      "match_columns": [
+        {
+          "column": "pan_number",
+          "method": "exact_non_null",
+          "aliases": ["pan", "pan_no", "permanent_account_number"]
+        }
+      ],
+      "survivorship": {
+        "strategy": "field_level_merge",
+        "priority": ["most_complete"]
+      },
+      "severity": "high",
+      "action_class": "review_required",
+      "notes": "Same PAN can legitimately appear under multiple GSTINs (one per state for one company). Review before merging — you may want to keep state-level rows.",
+      "min_group_size": 2,
+      "source": "library",
+      "version": 2
+    },
+    {
+      "id": "customer-composite-name-country-entity",
+      "stream": "customer",
+      "label": "Customer — name + country + entity type (composite)",
+      "description": "Three-key composite uniqueness for customer master.",
+      "kind": "duplicate",
+      "match_strategy": "fuzzy",
+      "match_columns": [
+        {
+          "column": "name",
+          "method": "token_sort_ratio",
+          "threshold": 0.88,
+          "aliases": ["customer_name", "legal_name", "company_name", "client_name"]
+        },
+        {
+          "column": "country",
+          "method": "exact",
+          "aliases": ["country_code", "land1", "iso_country"]
+        },
+        {
+          "column": "entity_type",
+          "method": "exact",
+          "aliases": ["legal_form", "company_type", "organisation_type"]
+        }
+      ],
+      "survivorship": {
+        "strategy": "field_level_merge",
+        "priority": ["most_complete", "most_recent"]
+      },
+      "severity": "high",
+      "action_class": "review_required",
+      "notes": "Strongest pre-emptive duplicate check for customer onboarding. Use when tax IDs are missing or unreliable.",
+      "min_group_size": 2,
+      "source": "library",
+      "version": 2
+    },
+    {
+      "id": "customer-fuzzy-name-state",
+      "stream": "customer",
+      "label": "Customer — fuzzy name + same state",
+      "description": "Customers with similar names operating in the same state. Useful when GSTIN is missing.",
+      "kind": "duplicate",
+      "match_strategy": "fuzzy",
+      "match_columns": [
+        {
+          "column": "name",
+          "method": "token_sort_ratio",
+          "threshold": 0.85,
+          "aliases": ["customer_name", "legal_name", "company_name"]
+        },
+        {
+          "column": "state",
+          "method": "exact",
+          "aliases": ["region", "province", "state_code"]
+        }
+      ],
+      "survivorship": {
+        "strategy": "field_level_merge",
+        "priority": ["most_complete", "most_recent"]
+      },
+      "severity": "medium",
+      "action_class": "review_required",
+      "notes": "Falls back to geography when tax IDs are absent. Higher false-positive rate than tax-id rules.",
+      "min_group_size": 2,
+      "source": "library",
+      "version": 2
+    },
+    {
+      "id": "customer-exact-email",
+      "stream": "customer",
+      "label": "Customer — same primary email",
+      "description": "Two customer records sharing the same normalized email address.",
+      "kind": "duplicate",
+      "match_strategy": "exact",
+      "match_columns": [
+        {
+          "column": "email",
+          "method": "exact_non_null",
+          "aliases": ["email_address", "primary_email", "contact_email", "smtp_addr"]
+        }
+      ],
+      "survivorship": {
+        "strategy": "most_recent",
+        "recency_column": "updated_at"
+      },
+      "severity": "medium",
+      "action_class": "review_required",
+      "notes": "B2C usage — strong duplicate signal. B2B — a generic info@ email can be shared across real legal entities; review before merging.",
+      "min_group_size": 2,
+      "source": "library",
+      "version": 2
+    },
+
+    {
+      "id": "material-exact-sku",
+      "stream": "material",
+      "label": "Material — exact SKU",
+      "description": "Two material rows with the same SKU are duplicates.",
+      "kind": "duplicate",
+      "match_strategy": "exact",
+      "match_columns": [
+        {
+          "column": "sku",
+          "method": "exact_non_null",
+          "aliases": ["matnr", "material_number", "item_code", "product_code", "part_number"]
+        }
+      ],
+      "survivorship": {
+        "strategy": "most_recent",
+        "recency_column": "updated_at"
+      },
+      "severity": "high",
+      "action_class": "auto_merge",
+      "notes": "SKUs are by design unique within a catalog. Same SKU ⇒ same item.",
+      "min_group_size": 2,
+      "source": "library",
+      "version": 2
+    },
+    {
+      "id": "material-exact-barcode",
+      "stream": "material",
+      "label": "Material — exact EAN / UPC barcode",
+      "description": "Two materials with the same global trade item number.",
+      "kind": "duplicate",
+      "match_strategy": "exact",
+      "match_columns": [
+        {
+          "column": "barcode",
+          "method": "exact_non_null",
+          "aliases": ["ean", "ean13", "ean_upc", "gtin", "upc", "isbn"]
+        }
+      ],
+      "survivorship": {
+        "strategy": "field_level_merge",
+        "priority": ["most_complete", "most_recent"]
+      },
+      "severity": "high",
+      "action_class": "auto_merge",
+      "notes": "GTIN / EAN is globally unique per product. Reliable auto-merge.",
+      "min_group_size": 2,
+      "source": "library",
+      "version": 2
+    },
+    {
+      "id": "material-fuzzy-description-category",
+      "stream": "material",
+      "label": "Material — fuzzy description + same category",
+      "description": "Catches typo or casing variations of the same item within a category.",
+      "kind": "duplicate",
+      "match_strategy": "fuzzy",
+      "match_columns": [
+        {
+          "column": "description",
+          "method": "token_sort_ratio",
+          "threshold": 0.80,
+          "aliases": ["maktx", "material_description", "item_description", "long_text", "product_description"]
+        },
+        {
+          "column": "category",
+          "method": "exact",
+          "aliases": ["matkl", "material_group", "product_group", "item_category"]
+        }
+      ],
+      "survivorship": {
+        "strategy": "field_level_merge",
+        "priority": ["most_complete"]
+      },
+      "severity": "medium",
+      "action_class": "review_required",
+      "notes": "Lower threshold (80%) because material descriptions vary in spec ordering (\"M8 x 50mm bolt\" vs \"Bolt M8 50mm\").",
+      "min_group_size": 2,
+      "source": "library",
+      "version": 2
+    },
+
+    {
+      "id": "employee-exact-national-id",
+      "stream": "employee",
+      "label": "Employee — exact national ID",
+      "description": "Two employees with the same PAN / SSN / national identifier.",
+      "kind": "duplicate",
+      "match_strategy": "exact",
+      "match_columns": [
+        {
+          "column": "national_id",
+          "method": "exact_non_null",
+          "aliases": ["pan_number", "ssn", "aadhaar", "nin", "national_insurance_number"]
+        }
+      ],
+      "survivorship": {
+        "strategy": "most_recent",
+        "recency_column": "hire_date"
+      },
+      "severity": "high",
+      "action_class": "review_required",
+      "notes": "Re-hires legitimately share national ID across records. Don't auto-merge — keep the hire history and treat as one person.",
+      "min_group_size": 2,
+      "source": "library",
+      "version": 2
+    },
+    {
+      "id": "employee-fuzzy-name-dob",
+      "stream": "employee",
+      "label": "Employee — fuzzy name + same date of birth",
+      "description": "Useful when national ID is masked or missing. Two employees with similar names and identical DOB.",
+      "kind": "duplicate",
+      "match_strategy": "fuzzy",
+      "match_columns": [
+        {
+          "column": "name",
+          "method": "token_sort_ratio",
+          "threshold": 0.90,
+          "aliases": ["full_name", "employee_name", "person_name"]
+        },
+        {
+          "column": "date_of_birth",
+          "method": "exact",
+          "aliases": ["dob", "birth_date", "birthdate"]
+        }
+      ],
+      "survivorship": {
+        "strategy": "most_recent",
+        "recency_column": "hire_date"
+      },
+      "severity": "medium",
+      "action_class": "review_required",
+      "notes": "Tight name threshold (90%) because two unrelated employees sharing a DOB is common in large organisations.",
+      "min_group_size": 2,
+      "source": "library",
+      "version": 2
+    },
+
+    {
+      "id": "gl-exact-account-number",
+      "stream": "gl_account",
+      "label": "GL — exact account number",
+      "description": "Two GL master rows with the same account number within the same chart of accounts.",
+      "kind": "duplicate",
+      "match_strategy": "exact",
+      "match_columns": [
+        {
+          "column": "account_number",
+          "method": "exact_non_null",
+          "aliases": ["saknr", "gl_account", "account_code", "account_id"]
+        },
+        {
+          "column": "chart_of_accounts",
+          "method": "exact",
+          "aliases": ["ktopl", "coa", "chart_id"]
+        }
+      ],
+      "survivorship": {
+        "strategy": "most_recent",
+        "recency_column": "updated_at"
+      },
+      "severity": "high",
+      "action_class": "auto_merge",
+      "notes": "Within a single chart of accounts, the account number is unique by design. Safe auto-merge.",
+      "min_group_size": 2,
+      "source": "library",
+      "version": 2
+    },
+    {
+      "id": "gl-fuzzy-description-coa",
+      "stream": "gl_account",
+      "label": "GL — fuzzy description + same chart of accounts",
+      "description": "Same kind of account under different numbers within one chart of accounts — typically migration noise.",
+      "kind": "duplicate",
+      "match_strategy": "fuzzy",
+      "match_columns": [
+        {
+          "column": "description",
+          "method": "token_sort_ratio",
+          "threshold": 0.85,
+          "aliases": ["txt50", "txt20", "long_description", "account_description"]
+        },
+        {
+          "column": "chart_of_accounts",
+          "method": "exact",
+          "aliases": ["ktopl", "coa"]
+        }
+      ],
+      "survivorship": {
+        "strategy": "field_level_merge",
+        "priority": ["most_complete"]
+      },
+      "severity": "medium",
+      "action_class": "review_required",
+      "notes": "Catches \"Office Supplies\" vs \"OFFICE SUPPLIES\" vs \"Office supply\". Often the survivor needs to be the one with the lower account number (more senior).",
+      "min_group_size": 2,
+      "source": "library",
+      "version": 2
+    },
+
+    {
+      "id": "cost-center-exact-code",
+      "stream": "cost_center",
+      "label": "Cost centre — exact code",
+      "description": "Two cost centres sharing the same code within the same controlling area.",
+      "kind": "duplicate",
+      "match_strategy": "exact",
+      "match_columns": [
+        {
+          "column": "cost_center_code",
+          "method": "exact_non_null",
+          "aliases": ["kostl", "kostl_code", "cc_code", "cost_centre_code"]
+        }
+      ],
+      "survivorship": {
+        "strategy": "most_recent",
+        "recency_column": "valid_from"
+      },
+      "severity": "high",
+      "action_class": "auto_merge",
+      "notes": "Cost centre codes are unique within a controlling area. Same code ⇒ same cost centre.",
+      "min_group_size": 2,
+      "source": "library",
+      "version": 2
+    }
+  ]
+}

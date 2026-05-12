@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -27,6 +28,9 @@ from ..services.duplicates_engine import (
     scan_exact,
     scan_fuzzy,
 )
+from ..services.project_storage import save_working as _save_working
+from ..services.rule_library import get_dedup_rule, list_dedup_rules
+from ..services.survivorship_engine import apply_survivor, compute_golden_record
 from ..session_store import SessionData
 
 router = APIRouter(prefix="/duplicates", tags=["duplicates"])
@@ -237,3 +241,297 @@ def export_selected(dup_type: str, body: ExportSelectedBody,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+
+# ─── Dedup rule library (B) ──────────────────────────────────────────
+
+
+@router.get("/library")
+def list_library_rules(stream: Optional[str] = None) -> dict:
+    """Catalog of pre-built duplicate-detection rules shipped with the app.
+
+    Filtered by stream when provided — so the Duplicates tab for a Vendor
+    project sees only vendor rules. The full list comes back when no
+    stream is passed.
+    """
+    rules = list_dedup_rules(stream)
+    return {"rules": rules, "count": len(rules)}
+
+
+@router.get("/library/{rule_id}")
+def get_library_rule(rule_id: str) -> dict:
+    rule = get_dedup_rule(rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    return rule
+
+
+class LibraryScanBody(BaseModel):
+    rule_id: str
+    # Optional mapping from "rule column" -> "actual dataset column". Lets
+    # the same library rule run against datasets that use local column
+    # naming (e.g. PAN_NUMBER instead of tax_id). When omitted, the rule's
+    # own column names are used as-is.
+    column_mapping: Optional[Dict[str, str]] = None
+
+
+def _suggest_column_mapping(
+    rule_columns: List[str],
+    dataset_columns: List[str],
+    semantic_glossary: Optional[Dict[str, Dict[str, Any]]],
+    rule: Optional[Dict[str, Any]] = None,
+) -> Dict[str, str]:
+    """Best-effort heuristic to pre-fill the column-mapping dialog.
+
+    Tries four signals in order:
+      1. Exact column name match (case-insensitive).
+      2. **Explicit alias list** declared on the rule (the strongest signal
+         — a rule that says ``aliases: ["tax_id", "pan_number", "vat_no",
+         "gstin"]`` will auto-map ``tax_id`` to whichever of those exists
+         in the dataset).
+      3. Semantic-glossary match: a rule column named ``email`` maps to
+         the first dataset column whose glossary entry has
+         ``semantic_type == "email"``.
+      4. Substring match (``pan_number`` ←→ ``tax_id``).
+    """
+    suggested: Dict[str, str] = {}
+    lower_to_actual = {c.lower(): c for c in dataset_columns}
+    glossary = semantic_glossary or {}
+    type_to_col: Dict[str, str] = {}
+    for col, entry in glossary.items():
+        if isinstance(entry, dict):
+            st = (entry.get("semantic_type") or "").lower()
+            if st and st not in type_to_col:
+                type_to_col[st] = col
+
+    # Build a quick lookup of explicit aliases keyed by rule-column name.
+    alias_lookup: Dict[str, List[str]] = {}
+    if rule:
+        for mc in rule.get("match_columns", []) or []:
+            rule_col = mc.get("column")
+            aliases = mc.get("aliases") or []
+            if rule_col and aliases:
+                alias_lookup[rule_col] = [str(a) for a in aliases]
+
+    for rule_col in rule_columns:
+        if rule_col in dataset_columns:
+            suggested[rule_col] = rule_col
+            continue
+        match = lower_to_actual.get(rule_col.lower())
+        if match:
+            suggested[rule_col] = match
+            continue
+        # Try the rule's declared aliases — case-insensitive.
+        aliases = alias_lookup.get(rule_col, [])
+        alias_hit = next(
+            (lower_to_actual[a.lower()] for a in aliases if a.lower() in lower_to_actual),
+            None,
+        )
+        if alias_hit:
+            suggested[rule_col] = alias_hit
+            continue
+        sem_match = type_to_col.get(rule_col.lower())
+        if sem_match:
+            suggested[rule_col] = sem_match
+            continue
+        # Loose substring scan as the last resort.
+        for cand in dataset_columns:
+            if rule_col.lower() in cand.lower() or cand.lower() in rule_col.lower():
+                suggested[rule_col] = cand
+                break
+    return suggested
+
+
+@router.post("/library/scan")
+def scan_with_library_rule(
+    body: LibraryScanBody,
+    sess: SessionData = Depends(require_dataframe),
+) -> dict:
+    """Apply a library dedup rule to the current dataset.
+
+    When a column referenced by the rule isn't present in the dataset and
+    the caller didn't supply a ``column_mapping`` for it, returns a
+    structured 400 so the UI can pop a "map these columns" dialog rather
+    than dead-ending the user.
+    """
+    rule = get_dedup_rule(body.rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+
+    rule_columns: List[str] = [
+        m["column"] for m in rule.get("match_columns", []) if "column" in m
+    ]
+    mapping: Dict[str, str] = body.column_mapping or {}
+    dataset_columns: List[str] = [str(c) for c in sess.df.columns]
+    dataset_set = set(dataset_columns)
+
+    # Resolve each rule column through the mapping, defaulting to itself.
+    resolved: List[str] = [mapping.get(c, c) for c in rule_columns]
+    missing = [
+        rc for rc, ac in zip(rule_columns, resolved)
+        if ac not in dataset_set
+    ]
+    if missing:
+        suggested = _suggest_column_mapping(
+            missing, dataset_columns, sess.semantic_glossary, rule=rule,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "missing_columns",
+                "message": (
+                    "This rule references columns that aren't in the current "
+                    "dataset. Map them to your columns and rerun."
+                ),
+                "rule_id": rule["id"],
+                "rule_label": rule.get("label"),
+                "rule_columns": rule_columns,
+                "missing_columns": missing,
+                "available_columns": dataset_columns,
+                "suggested_mapping": suggested,
+            },
+        )
+
+    strategy = rule.get("match_strategy", "exact")
+    if strategy == "exact":
+        groups = scan_exact(sess, resolved)
+        dup_type = "exact"
+    else:
+        thresh = next(
+            (m.get("threshold", 0.85) for m in rule.get("match_columns", []) if "threshold" in m),
+            0.85,
+        )
+        groups = scan_fuzzy(sess, resolved, float(thresh), algorithm="token_sort_ratio")
+        dup_type = "fuzzy"
+
+    return {
+        "rule_id": rule["id"],
+        "label": rule.get("label"),
+        "dup_type": dup_type,
+        "total_groups": len(groups),
+        "total_rows": sum(len(g.indices) for g in groups),
+        "summaries": [group_to_summary(g) for g in groups],
+        "survivorship": rule.get("survivorship", {"strategy": "most_complete"}),
+        "resolved_columns": dict(zip(rule_columns, resolved)),
+    }
+
+
+# ─── Survivorship / golden record (C) ────────────────────────────────
+
+
+@router.get("/{dup_type}/group/{group_id}/golden")
+def preview_golden_record(
+    dup_type: str,
+    group_id: int,
+    rule_id: Optional[str] = None,
+    sess: SessionData = Depends(require_dataframe),
+) -> dict:
+    """Compute the proposed golden record for one duplicate group.
+
+    If ``rule_id`` is supplied, the rule's survivorship config drives the
+    merge; otherwise a sensible default (most_complete) is used. Returns
+    the merged record + per-column provenance so the UI can render the
+    "where did this value come from" panel.
+    """
+    group = find_group(sess, dup_type, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    indices = list(group.indices)
+    if not indices:
+        raise HTTPException(status_code=400, detail="Group is empty")
+
+    survivorship = {"strategy": "most_complete"}
+    if rule_id:
+        rule = get_dedup_rule(rule_id)
+        if rule:
+            survivorship = rule.get("survivorship", survivorship)
+
+    group_df = sess.df.loc[indices]
+    golden = compute_golden_record(group_df, survivorship)
+
+    members = []
+    for idx in indices:
+        row = sess.df.loc[idx]
+        members.append({
+            "index": int(idx),
+            "is_survivor": int(idx) == golden.survivor_index,
+            "values": {
+                c: (None if pd.isna(row[c]) else row[c])
+                for c in sess.df.columns
+            },
+        })
+
+    return {
+        "group_id": group.group_id,
+        "dup_type": dup_type,
+        "survivor_index": golden.survivor_index,
+        "survivorship_strategy": survivorship.get("strategy"),
+        "members": members,
+        "golden_record": {
+            c: (None if (v is not None and pd.isna(v)) else v)
+            for c, v in golden.record.items()
+        },
+        "provenance": golden.provenance,
+    }
+
+
+class ApplyGoldenBody(BaseModel):
+    rule_id: Optional[str] = None
+    overrides: Optional[Dict[str, Any]] = None  # column -> value (manual override)
+
+
+@router.post("/{dup_type}/group/{group_id}/apply-golden")
+def apply_golden_record(
+    dup_type: str,
+    group_id: int,
+    body: ApplyGoldenBody,
+    sess: SessionData = Depends(require_dataframe),
+) -> dict:
+    """Materialize the golden record: update the survivor row, drop the
+    other group members, persist if a project is active. Overrides let
+    the user replace any computed field value before applying.
+    """
+    group = find_group(sess, dup_type, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    indices = list(group.indices)
+    if not indices:
+        raise HTTPException(status_code=400, detail="Group is empty")
+
+    survivorship = {"strategy": "most_complete"}
+    if body.rule_id:
+        rule = get_dedup_rule(body.rule_id)
+        if rule:
+            survivorship = rule.get("survivorship", survivorship)
+
+    group_df = sess.df.loc[indices]
+    golden = compute_golden_record(group_df, survivorship)
+    # Manual overrides take precedence over the engine's choices.
+    if body.overrides:
+        for col, val in body.overrides.items():
+            if col in golden.record:
+                golden.record[col] = val
+                golden.provenance[col] = {
+                    "source_index": None,
+                    "reason": "manual_override",
+                }
+
+    before = int(len(sess.df))
+    sess.df = apply_survivor(sess.df, indices, golden)
+    after = int(len(sess.df))
+
+    # Persist if a project is active.
+    if sess.active_project_id and sess.df is not None:
+        _save_working(sess.active_project_id, sess.df, sess.original_df)
+
+    return {
+        "ok": True,
+        "survivor_index": golden.survivor_index,
+        "rows_dropped": before - after,
+        "rows_remaining": after,
+        "applied_record": {
+            c: (None if (v is not None and pd.isna(v)) else v)
+            for c, v in golden.record.items()
+        },
+    }

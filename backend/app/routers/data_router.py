@@ -15,7 +15,9 @@ from pydantic import BaseModel
 
 from core.audit_log import log_action
 
+from ..db import get_db
 from ..deps import get_session, require_dataframe
+from ..models import Project
 from ..schemas import CompareResponse, LoadResponse, PreviewResponse
 from ..services.compare_engine import cell_diff as _cell_diff, stats as _compare_stats
 from ..services.db_connector_service import (
@@ -25,7 +27,41 @@ from ..services.db_connector_service import (
     load_from_database,
 )
 from ..services.loader import load_dataframe, safe_records
+from ..services.project_storage import (
+    clear_working,
+    save_glossary,
+    save_rules,
+    save_scope,
+    save_working,
+)
 from ..session_store import SessionData
+from sqlalchemy.orm import Session
+
+
+def _persist_to_active_project(sess: SessionData, db) -> None:
+    """Snapshot the session's working DataFrame to the active project's
+    parquet file and refresh the cached metadata in the project row.
+
+    No-op when there's no active project — we still allow the legacy
+    "session without a project" flow so existing tests keep working.
+    """
+    if not sess.active_project_id or sess.df is None:
+        return
+    save_working(sess.active_project_id, sess.df, sess.original_df)
+    project = db.query(Project).filter(Project.id == sess.active_project_id).one_or_none()
+    if project is None:
+        return
+    project.dataset_filename = sess.filename
+    project.dataset_rows = int(len(sess.df))
+    project.dataset_columns = int(len(sess.df.columns))
+    if sess.file_path:
+        try:
+            project.dataset_size_bytes = int(os.path.getsize(sess.file_path))
+        except OSError:
+            pass
+    if project.status in ("empty", None):
+        project.status = "data_loaded"
+    db.commit()
 
 router = APIRouter(prefix="/data", tags=["data"])
 
@@ -36,6 +72,7 @@ async def upload(
     sheet_name: Optional[str] = Form(default=None),
     header_row: int = Form(default=0),
     sess: SessionData = Depends(get_session),
+    db: Session = Depends(get_db),
 ) -> LoadResponse:
     suffix = Path(file.filename or "data.csv").suffix.lower()
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -67,6 +104,8 @@ async def upload(
                    row_count=len(df), col_count=len(df.columns), filename=sess.filename)
     except Exception:
         pass
+
+    _persist_to_active_project(sess, db)
 
     return LoadResponse(
         filename=sess.filename,
@@ -274,6 +313,7 @@ def reset(sess: SessionData = Depends(require_dataframe)) -> dict:
 def export(
     format: str = Query("csv"),
     sess: SessionData = Depends(require_dataframe),
+    db: Session = Depends(get_db),
 ):
     df = sess.df
     fmt = format.lower()
@@ -301,6 +341,18 @@ def export(
 
     buf.seek(0)
     fname = f"{Path(sess.filename).stem}.{ext}"
+
+    # Mark the project as exported so the Home tile reflects completion.
+    # The user can still continue editing — opening a project again does
+    # not flip it back; the status just records the latest milestone.
+    if sess.active_project_id:
+        project = (
+            db.query(Project).filter(Project.id == sess.active_project_id).one_or_none()
+        )
+        if project is not None and project.status != "exported":
+            project.status = "exported"
+            db.commit()
+
     return StreamingResponse(
         buf,
         media_type=media,
@@ -419,6 +471,7 @@ def load_from_staged(
     sheet_name: Optional[str] = Form(default=None),
     header_row: int = Form(default=0),
     sess: SessionData = Depends(get_session),
+    db: Session = Depends(get_db),
 ) -> LoadResponse:
     """Parse the already-staged file with the chosen sheet + header row."""
     if not sess.file_path or not os.path.exists(sess.file_path):
@@ -448,6 +501,8 @@ def load_from_staged(
     except Exception:
         pass
 
+    _persist_to_active_project(sess, db)
+
     return LoadResponse(
         filename=sess.filename,
         rows=len(df),
@@ -461,18 +516,33 @@ def load_from_staged(
 
 @router.get("/file-info")
 def file_info(sess: SessionData = Depends(get_session)) -> dict:
-    """Current file path + size; used by the 'Current File' KPI."""
-    if not sess.file_path or not os.path.exists(sess.file_path):
+    """Current dataset metadata. Source of truth is ``sess.df`` — the
+    upload tempfile may have been cleaned up or the working DataFrame
+    may have been restored from a project's parquet snapshot (no
+    ``file_path`` in that case).
+    """
+    if sess.df is None:
         return {"loaded": False}
-    size = os.path.getsize(sess.file_path)
+    size = 0
+    if sess.file_path and os.path.exists(sess.file_path):
+        try:
+            size = int(os.path.getsize(sess.file_path))
+        except OSError:
+            size = 0
+    if size == 0:
+        # Estimate from the in-memory DataFrame so the UI doesn't show 0.0 MB.
+        try:
+            size = int(sess.df.memory_usage(deep=True).sum())
+        except Exception:
+            size = 0
     return {
         "loaded": True,
         "file_path": sess.file_path,
         "filename": sess.filename,
-        "size_bytes": int(size),
+        "size_bytes": size,
         "size_mb": round(size / 1024 / 1024, 2),
-        "rows": int(len(sess.df)) if sess.df is not None else 0,
-        "columns": int(len(sess.df.columns)) if sess.df is not None else 0,
+        "rows": int(len(sess.df)),
+        "columns": int(len(sess.df.columns)),
     }
 
 
@@ -496,7 +566,7 @@ def column_summary(sess: SessionData = Depends(require_dataframe)) -> List[Dict[
 
 
 @router.post("/clear")
-def clear_data(sess: SessionData = Depends(get_session)) -> dict:
+def clear_data(sess: SessionData = Depends(get_session), db: Session = Depends(get_db)) -> dict:
     """Streamlit 'Clear All Data' / 'Load Different File' — reset the session."""
     sess.df = None
     sess.original_df = None
@@ -515,6 +585,23 @@ def clear_data(sess: SessionData = Depends(get_session)) -> dict:
     sess.validation_history = []
     sess.columns_of_interest = []
     sess.semantic_glossary = None
+    # Wipe the project's on-disk working DataFrame too — Clear All means
+    # the user wants a clean slate, not a hidden parquet to be re-loaded
+    # on the next /projects/{id} open.
+    if sess.active_project_id:
+        clear_working(sess.active_project_id)
+        project = (
+            db.query(Project)
+            .filter(Project.id == sess.active_project_id)
+            .one_or_none()
+        )
+        if project is not None:
+            project.dataset_filename = None
+            project.dataset_rows = None
+            project.dataset_columns = None
+            project.dataset_size_bytes = None
+            project.status = "empty"
+            db.commit()
     return {"ok": True}
 
 
@@ -565,6 +652,12 @@ def set_columns_of_interest(
         sess.quality_report = None
         sess.ai_validation_rules = None
         sess.semantic_glossary = None
+        if sess.active_project_id:
+            save_rules(sess.active_project_id, None)
+            save_glossary(sess.active_project_id, None)
+    # Persist the scope selection itself.
+    if sess.active_project_id:
+        save_scope(sess.active_project_id, sess.columns_of_interest)
     return {
         "ok": True,
         "selected": sess.columns_of_interest,

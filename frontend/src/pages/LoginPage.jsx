@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import {
-  Box, Paper, Typography, TextField, Button, Alert, Stack, Tabs, Tab, Divider,
+  Box, Typography, TextField, Button, Alert, Stack, Tabs, Tab,
 } from '@mui/material';
 import { useAuth } from '../context/AuthContext.jsx';
-import { UNIQUS } from '../theme.js';
 
 function SignInForm() {
   const { login } = useAuth();
@@ -18,8 +17,8 @@ function SignInForm() {
     setBusy(true);
     try {
       await login(username, password);
-    } catch (e) {
-      setErr(e?.response?.data?.detail || 'Login failed');
+    } catch (e2) {
+      setErr(e2?.response?.data?.detail || 'Login failed');
     } finally {
       setBusy(false);
     }
@@ -28,25 +27,63 @@ function SignInForm() {
   return (
     <Box component="form" onSubmit={submit}>
       {err && <Alert severity="error" sx={{ mb: 2 }}>{err}</Alert>}
-      <Stack spacing={2}>
-        <TextField
-          label="Username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          fullWidth
-          autoFocus
-          autoComplete="username"
-        />
-        <TextField
-          label="Password"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          fullWidth
-          autoComplete="current-password"
-        />
-        <Button type="submit" variant="contained" size="large" disabled={busy}>
-          {busy ? 'Signing in…' : 'Sign in'}
+      <Stack spacing={2.5}>
+        <Box>
+          <Typography
+            sx={{
+              fontFamily: "'Open Sans', sans-serif",
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.12em',
+              color: '#8A8A8A',
+              textTransform: 'uppercase',
+              mb: 0.75,
+            }}
+          >
+            Username
+          </Typography>
+          <TextField
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            fullWidth
+            autoFocus
+            autoComplete="username"
+            placeholder="you@company.com"
+            size="medium"
+          />
+        </Box>
+        <Box>
+          <Typography
+            sx={{
+              fontFamily: "'Open Sans', sans-serif",
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.12em',
+              color: '#8A8A8A',
+              textTransform: 'uppercase',
+              mb: 0.75,
+            }}
+          >
+            Password
+          </Typography>
+          <TextField
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            fullWidth
+            autoComplete="current-password"
+            placeholder="••••••••"
+            size="medium"
+          />
+        </Box>
+        <Button
+          type="submit"
+          variant="contained"
+          size="large"
+          disabled={busy}
+          sx={{ mt: 1, py: 1.5, fontSize: 15, fontWeight: 700 }}
+        >
+          {busy ? 'Signing in…' : 'Continue'}
         </Button>
       </Stack>
     </Box>
@@ -82,55 +119,89 @@ function SignUpForm({ onDone }) {
     try {
       await register(username.trim(), password, name.trim());
       onDone?.();
-    } catch (e) {
-      setErr(e?.response?.data?.detail || 'Registration failed');
+    } catch (e2) {
+      setErr(e2?.response?.data?.detail || 'Registration failed');
     } finally {
       setBusy(false);
     }
   };
 
+  const LabelEyebrow = ({ children }) => (
+    <Typography
+      sx={{
+        fontFamily: "'Open Sans', sans-serif",
+        fontSize: 11,
+        fontWeight: 700,
+        letterSpacing: '0.12em',
+        color: '#8A8A8A',
+        textTransform: 'uppercase',
+        mb: 0.75,
+      }}
+    >
+      {children}
+    </Typography>
+  );
+
   return (
     <Box component="form" onSubmit={submit}>
       {err && <Alert severity="error" sx={{ mb: 2 }}>{err}</Alert>}
       <Stack spacing={2}>
-        <TextField
-          label="Username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          fullWidth
-          autoFocus
-          autoComplete="username"
-          helperText="3+ chars; letters, digits, . _ - allowed"
-        />
-        <TextField
-          label="Display name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          fullWidth
-          autoComplete="name"
-          helperText="Shown in the sidebar (e.g. 'Toshit Tejasvat')"
-        />
-        <TextField
-          label="Password"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          fullWidth
-          autoComplete="new-password"
-          helperText="At least 6 characters"
-        />
-        <TextField
-          label="Confirm password"
-          type="password"
-          value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
-          fullWidth
-          autoComplete="new-password"
-        />
-        <Button type="submit" variant="contained" size="large" disabled={busy}>
+        <Box>
+          <LabelEyebrow>Username</LabelEyebrow>
+          <TextField
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            fullWidth
+            autoFocus
+            autoComplete="username"
+            placeholder="jdoe"
+            helperText="3+ chars; letters, digits, . _ - allowed"
+          />
+        </Box>
+        <Box>
+          <LabelEyebrow>Display name</LabelEyebrow>
+          <TextField
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            fullWidth
+            autoComplete="name"
+            placeholder="Jane Doe"
+            helperText="Shown in the sidebar"
+          />
+        </Box>
+        <Box>
+          <LabelEyebrow>Password</LabelEyebrow>
+          <TextField
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            fullWidth
+            autoComplete="new-password"
+            placeholder="••••••••"
+            helperText="At least 6 characters"
+          />
+        </Box>
+        <Box>
+          <LabelEyebrow>Confirm password</LabelEyebrow>
+          <TextField
+            type="password"
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            fullWidth
+            autoComplete="new-password"
+            placeholder="••••••••"
+          />
+        </Box>
+        <Button
+          type="submit"
+          variant="contained"
+          size="large"
+          disabled={busy}
+          sx={{ mt: 1, py: 1.5, fontSize: 15, fontWeight: 700 }}
+        >
           {busy ? 'Creating account…' : 'Create account'}
         </Button>
-        <Typography variant="caption" color="text.secondary" align="center">
+        <Typography sx={{ fontSize: 12, color: '#8A8A8A', textAlign: 'center' }}>
           You will be signed in automatically after sign-up.
         </Typography>
       </Stack>
@@ -146,63 +217,199 @@ export default function LoginPage() {
       sx={{
         minHeight: '100vh',
         display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: UNIQUS.gradient,
-        p: 2,
+        flexDirection: { xs: 'column', md: 'row' },
+        bgcolor: '#FFFFFF',
       }}
     >
-      <Paper
-        elevation={0}
+      {/* ─── LEFT: dark hero ─────────────────────────────────────── */}
+      <Box
         sx={{
-          p: 5,
-          width: 460,
-          borderRadius: 4,
-          boxShadow: '0 24px 60px rgba(0,0,0,0.25)',
+          flex: { xs: 'none', md: 1 },
+          minHeight: { xs: 280, md: 'auto' },
+          background: 'linear-gradient(160deg, #1B0E3D 0%, #2A124A 40%, #492079 100%)',
+          color: '#FFFFFF',
+          position: 'relative',
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'space-between',
+          px: { xs: 4, md: 8 },
+          py: { xs: 4, md: 6 },
+          overflow: 'hidden',
         }}
       >
-        <Stack alignItems="center" spacing={2} mb={3}>
+        {/* soft radial highlight */}
+        <Box
+          sx={{
+            position: 'absolute',
+            top: '20%',
+            right: '-15%',
+            width: 480,
+            height: 480,
+            borderRadius: '50%',
+            background: 'radial-gradient(circle, rgba(179,30,124,0.35) 0%, rgba(179,30,124,0) 70%)',
+            pointerEvents: 'none',
+          }}
+        />
+
+        <Box sx={{ position: 'relative' }}>
           <Box
+            component="img"
+            src="/assets/uniqus_logo.png"
+            alt="Uniqus"
             sx={{
-              background: UNIQUS.gradient,
-              borderRadius: 0,
-              px: 4,
-              py: 2.5,
-              width: '100%',
-              textAlign: 'center',
+              height: 40,
+              width: 'auto',
+              filter: 'brightness(0) invert(1)',
+              display: 'block',
+            }}
+          />
+        </Box>
+
+        <Box sx={{ position: 'relative', maxWidth: 520 }}>
+          <Typography
+            sx={{
+              fontFamily: "'Montserrat', sans-serif",
+              fontSize: 12,
+              fontWeight: 700,
+              letterSpacing: '0.2em',
+              color: 'rgba(255,255,255,0.7)',
+              textTransform: 'uppercase',
+              mb: 2,
             }}
           >
-            <Box
-              component="img"
-              src="/assets/uniqus_logo.png"
-              alt="Uniqus"
-              sx={{
-                height: 48,
-                width: 'auto',
-                filter: 'brightness(0) invert(1)',
-              }}
-            />
-          </Box>
-          <Typography variant="h5" sx={{ mt: 1 }}>Master Data Profiler</Typography>
-          <Typography variant="body2" color="text.secondary" align="center">
-            {tab === 0
-              ? 'Sign in to access your data quality workspace'
-              : 'Create an account to get started'}
+            Welcome
           </Typography>
-        </Stack>
+          <Typography
+            sx={{
+              fontFamily: "'Montserrat', sans-serif",
+              fontSize: { xs: 36, md: 56 },
+              fontWeight: 800,
+              lineHeight: 1.05,
+              letterSpacing: '-0.02em',
+              color: '#FFFFFF',
+              mb: 2.5,
+            }}
+          >
+            Master Data{' '}
+            <Box component="span" sx={{ fontStyle: 'italic', fontWeight: 700 }}>
+              Profiler
+            </Box>
+          </Typography>
+          <Typography
+            sx={{
+              fontFamily: "'Open Sans', sans-serif",
+              fontSize: 16,
+              lineHeight: 1.6,
+              color: 'rgba(255,255,255,0.78)',
+              maxWidth: 440,
+            }}
+          >
+            AI-driven data quality for enterprise teams. Profile, validate and
+            cleanse master data — sign in with your work account.
+          </Typography>
+        </Box>
 
-        <Tabs
-          value={tab}
-          onChange={(_, v) => setTab(v)}
-          variant="fullWidth"
-          sx={{ mb: 2.5, borderBottom: 1, borderColor: 'divider' }}
+        <Box
+          sx={{
+            position: 'relative',
+            display: 'flex',
+            gap: 2,
+            alignItems: 'center',
+            fontSize: 12,
+            color: 'rgba(255,255,255,0.55)',
+          }}
         >
-          <Tab label="Sign in" />
-          <Tab label="Sign up" />
-        </Tabs>
+          <Typography sx={{ fontSize: 12, letterSpacing: '0.04em' }}>
+            Secure sign-in
+          </Typography>
+          <Box sx={{ width: 3, height: 3, borderRadius: '50%', bgcolor: 'rgba(255,255,255,0.4)' }} />
+          <Typography sx={{ fontSize: 12, letterSpacing: '0.04em' }}>
+            SSO-ready
+          </Typography>
+          <Box sx={{ width: 3, height: 3, borderRadius: '50%', bgcolor: 'rgba(255,255,255,0.4)' }} />
+          <Typography sx={{ fontSize: 12, letterSpacing: '0.04em' }}>
+            Enterprise-ready
+          </Typography>
+        </Box>
+      </Box>
 
-        {tab === 0 ? <SignInForm /> : <SignUpForm onDone={() => setTab(0)} />}
-      </Paper>
+      {/* ─── RIGHT: form column ──────────────────────────────────── */}
+      <Box
+        sx={{
+          flex: { xs: 'none', md: 1 },
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'center',
+          bgcolor: '#FFFFFF',
+          px: { xs: 3, sm: 6, md: 10 },
+          py: { xs: 5, md: 6 },
+          position: 'relative',
+        }}
+      >
+        <Box sx={{ maxWidth: 440, width: '100%', mx: 'auto', flex: { xs: 'none', md: 1 }, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+          <Typography
+            sx={{
+              fontFamily: "'Montserrat', sans-serif",
+              fontSize: { xs: 28, md: 36 },
+              fontWeight: 800,
+              letterSpacing: '-0.02em',
+              color: '#1A1A1A',
+              mb: 1,
+            }}
+          >
+            {tab === 0 ? 'Sign in' : 'Create account'}
+          </Typography>
+          <Typography
+            sx={{
+              fontSize: 15,
+              color: '#555555',
+              mb: 3.5,
+            }}
+          >
+            {tab === 0
+              ? 'Use your work credentials to access your workspace.'
+              : 'Start with a new account in under a minute.'}
+          </Typography>
+
+          <Tabs
+            value={tab}
+            onChange={(_, v) => setTab(v)}
+            sx={{
+              mb: 3,
+              borderBottom: '1px solid #E7E6E6',
+              minHeight: 40,
+              '& .MuiTab-root': {
+                minHeight: 40,
+                fontWeight: 600,
+                fontSize: 14,
+                textTransform: 'none',
+                px: 0,
+                mr: 4,
+              },
+            }}
+            TabIndicatorProps={{ sx: { height: 2.5, borderRadius: 2, bgcolor: '#6A28A8' } }}
+          >
+            <Tab label="Sign in" />
+            <Tab label="Sign up" />
+          </Tabs>
+
+          {tab === 0 ? <SignInForm /> : <SignUpForm onDone={() => setTab(0)} />}
+        </Box>
+
+        <Box
+          sx={{
+            mt: { xs: 4, md: 0 },
+            position: { md: 'absolute' },
+            bottom: { md: 32 },
+            right: { md: 40 },
+            textAlign: { xs: 'center', md: 'right' },
+          }}
+        >
+          <Typography sx={{ fontSize: 11, color: '#8A8A8A', letterSpacing: '0.02em' }}>
+            © Uniqus Consultech · Master Data Profiler
+          </Typography>
+        </Box>
+      </Box>
     </Box>
   );
 }

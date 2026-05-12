@@ -217,13 +217,13 @@ export default function SemanticGlossary() {
             <Table size="small" stickyHeader>
               <TableHead>
                 <TableRow>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'rgba(91,26,120,0.05)' }}>Column</TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'rgba(91,26,120,0.05)' }}>Semantic Type</TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'rgba(91,26,120,0.05)' }}>Display Name</TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'rgba(91,26,120,0.05)' }}>Description</TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'rgba(91,26,120,0.05)' }}>Format Hint</TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'rgba(91,26,120,0.05)' }}>Confidence</TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'rgba(91,26,120,0.05)', width: 60 }} />
+                  <TableCell sx={{ fontWeight: 700, bgcolor: '#FBFAFC' }}>Column</TableCell>
+                  <TableCell sx={{ fontWeight: 700, bgcolor: '#FBFAFC' }}>Semantic Type</TableCell>
+                  <TableCell sx={{ fontWeight: 700, bgcolor: '#FBFAFC' }}>Display Name</TableCell>
+                  <TableCell sx={{ fontWeight: 700, bgcolor: '#FBFAFC' }}>Description</TableCell>
+                  <TableCell sx={{ fontWeight: 700, bgcolor: '#FBFAFC' }}>Format Hint</TableCell>
+                  <TableCell sx={{ fontWeight: 700, bgcolor: '#FBFAFC' }}>Confidence</TableCell>
+                  <TableCell sx={{ fontWeight: 700, bgcolor: '#FBFAFC', width: 60 }} />
                 </TableRow>
               </TableHead>
               <TableBody>

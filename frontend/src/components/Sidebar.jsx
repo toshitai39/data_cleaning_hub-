@@ -1,6 +1,8 @@
-import { Box, Typography, Avatar, Button } from '@mui/material';
+import { Box, Typography, Avatar, IconButton, Tooltip } from '@mui/material';
 import LogoutIcon from '@mui/icons-material/Logout';
+import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined';
 import UploadFileOutlinedIcon from '@mui/icons-material/UploadFileOutlined';
+import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import AutoFixHighOutlinedIcon from '@mui/icons-material/AutoFixHighOutlined';
 import VerifiedOutlinedIcon from '@mui/icons-material/VerifiedOutlined';
@@ -9,13 +11,19 @@ import CompareArrowsOutlinedIcon from '@mui/icons-material/CompareArrowsOutlined
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
 import { useAuth } from '../context/AuthContext.jsx';
-import { UNIQUS } from '../theme.js';
 
 export const STAGES = [
+  {
+    section: 'WORKSPACE',
+    steps: [
+      { key: 'home', label: 'Home', icon: HomeOutlinedIcon },
+    ],
+  },
   {
     section: 'DATA INPUT',
     steps: [
       { key: 'load', label: 'Load data', icon: UploadFileOutlinedIcon },
+      { key: 'dashboard', label: 'Dashboard', icon: DashboardOutlinedIcon },
     ],
   },
   {
@@ -25,10 +33,10 @@ export const STAGES = [
     ],
   },
   {
-    section: 'RULES & QUALITY',
+    section: 'RULES & CLEANSING',
     steps: [
       { key: 'rules', label: 'Rule generator', icon: AutoFixHighOutlinedIcon },
-      { key: 'quality', label: 'Data quality', icon: VerifiedOutlinedIcon },
+      { key: 'quality', label: 'Cleansing', icon: VerifiedOutlinedIcon },
       { key: 'dupes', label: 'Find duplicates', icon: ContentCopyOutlinedIcon },
     ],
   },
@@ -52,26 +60,38 @@ function StepRow({ icon: Icon, label, active, onClick }) {
       onClick={onClick}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); }}
       sx={{
+        position: 'relative',
         display: 'flex',
         alignItems: 'center',
-        gap: 1.25,
-        px: 1.5,
-        py: 1,
-        mb: 0.5,
+        gap: 1.5,
+        px: 1.75,
+        py: 1.1,
+        mb: 0.4,
         borderRadius: 1.25,
         cursor: 'pointer',
-        borderLeft: '3px solid',
-        borderColor: active ? 'primary.main' : 'transparent',
-        bgcolor: active ? 'rgba(91,26,120,0.10)' : 'transparent',
-        color: active ? 'primary.main' : 'text.primary',
-        transition: 'background-color 120ms, border-color 120ms',
+        color: active ? '#FFFFFF' : 'rgba(255,255,255,0.78)',
+        bgcolor: active ? 'rgba(255,255,255,0.10)' : 'transparent',
+        fontWeight: active ? 600 : 500,
+        transition: 'background-color 120ms, color 120ms',
         '&:hover': {
-          bgcolor: active ? 'rgba(91,26,120,0.14)' : 'rgba(0,0,0,0.04)',
+          bgcolor: active ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.06)',
+          color: '#FFFFFF',
         },
+        '&::before': active ? {
+          content: '""',
+          position: 'absolute',
+          left: 6,
+          top: '50%',
+          transform: 'translateY(-50%)',
+          width: 3,
+          height: 22,
+          background: '#C879AB',
+          borderRadius: 2,
+        } : {},
       }}
     >
-      <Icon fontSize="small" sx={{ color: active ? 'primary.main' : 'text.secondary' }} />
-      <Typography variant="body2" sx={{ fontWeight: active ? 600 : 500 }}>
+      <Icon sx={{ fontSize: 18, color: active ? '#FFFFFF' : 'rgba(255,255,255,0.68)' }} />
+      <Typography variant="body2" sx={{ fontWeight: 'inherit', fontSize: '0.84rem' }}>
         {label}
       </Typography>
     </Box>
@@ -86,11 +106,11 @@ export default function Sidebar({ activeKey, onSelect }) {
     <Box
       component="aside"
       sx={{
-        width: 280,
+        width: 260,
         flexShrink: 0,
-        bgcolor: '#faf7fb',
-        borderRight: '1px solid',
-        borderColor: 'divider',
+        bgcolor: '#1B0E3D',
+        color: '#FFFFFF',
+        borderRight: '1px solid rgba(0,0,0,0.4)',
         display: 'flex',
         flexDirection: 'column',
         height: '100vh',
@@ -98,90 +118,54 @@ export default function Sidebar({ activeKey, onSelect }) {
         top: 0,
       }}
     >
-      <Box sx={{ background: UNIQUS.gradient, p: 2, textAlign: 'center' }}>
+      <Box sx={{
+        px: 3,
+        py: 3.5,
+        borderBottom: '1px solid rgba(255,255,255,0.08)',
+      }}>
         <Box
           component="img"
           src="/assets/uniqus_logo.png"
           alt="Uniqus"
           sx={{
-            height: 28,
+            height: 32,
             display: 'block',
-            mx: 'auto',
-            mb: 0.5,
+            mb: 1.5,
             filter: 'brightness(0) invert(1)',
           }}
         />
-        <Typography variant="subtitle2" sx={{ color: 'white', fontWeight: 700, letterSpacing: 0.3 }}>
-          Master Data Profiler
-        </Typography>
-        <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.85)' }}>
-          Enterprise Data Quality
-        </Typography>
-      </Box>
-
-      <Box
-        sx={{
-          p: 1.75,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 1.25,
-          borderBottom: '1px solid',
-          borderColor: 'divider',
-        }}
-      >
-        <Avatar
-          sx={{
-            background: UNIQUS.gradientSoft,
-            width: 36,
-            height: 36,
-            fontWeight: 700,
-            fontSize: 14,
-          }}
-        >
-          {initials}
-        </Avatar>
-        <Box sx={{ minWidth: 0 }}>
-          <Typography variant="body2" noWrap sx={{ fontWeight: 600 }}>
-            {user?.name || user?.username}
-          </Typography>
-          <Typography variant="caption" color="text.secondary">Authenticated</Typography>
-        </Box>
-      </Box>
-
-      <Box sx={{ flex: 1, overflowY: 'auto', p: 1.5 }}>
         <Typography
-          variant="caption"
           sx={{
-            color: 'text.secondary',
+            fontFamily: "'Montserrat', sans-serif",
+            fontSize: '11px',
             fontWeight: 700,
-            letterSpacing: 1.1,
-            display: 'block',
-            ml: 1,
-            mb: 1,
+            letterSpacing: '0.14em',
+            color: 'rgba(160,150,194,1)',
+            textTransform: 'uppercase',
           }}
         >
-          PROFILER · PIPELINE
+          Data Profiler · Pipeline
         </Typography>
-        <Box sx={{ borderTop: '1px solid', borderColor: 'divider', mb: 1.5 }} />
+      </Box>
 
+      <Box sx={{ flex: 1, overflowY: 'auto', py: 1, px: 1.5 }}>
         {STAGES.map((stage) => (
-          <Box key={stage.section} sx={{ mb: 1.5 }}>
-            <Box
+          <Box key={stage.section} sx={{ mb: 1.25 }}>
+            <Typography
               sx={{
-                bgcolor: 'rgba(91,26,120,0.06)',
-                px: 1.5,
-                py: 0.6,
-                mb: 0.75,
-                borderRadius: 1,
+                px: 1.25,
+                pt: 1.5,
+                pb: 0.75,
+                fontFamily: "'Montserrat', sans-serif",
+                fontSize: '10px',
+                fontWeight: 700,
+                letterSpacing: '0.16em',
+                color: 'rgba(160,150,194,0.85)',
+                textTransform: 'uppercase',
               }}
             >
-              <Typography
-                variant="caption"
-                sx={{ fontWeight: 700, letterSpacing: 0.8, color: 'text.secondary' }}
-              >
-                {stage.section}
-              </Typography>
-            </Box>
+              {stage.section}
+            </Typography>
             {stage.steps.map((step) => (
               <StepRow
                 key={step.key}
@@ -195,10 +179,58 @@ export default function Sidebar({ activeKey, onSelect }) {
         ))}
       </Box>
 
-      <Box sx={{ p: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
-        <Button variant="outlined" startIcon={<LogoutIcon />} onClick={logout} fullWidth size="small">
-          Sign out
-        </Button>
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1.25,
+          px: 2,
+          py: 1.75,
+          borderTop: '1px solid rgba(255,255,255,0.08)',
+        }}
+      >
+        <Avatar
+          sx={{
+            background: 'linear-gradient(135deg, #492079 0%, #B31E7C 100%)',
+            width: 36,
+            height: 36,
+            fontWeight: 700,
+            fontSize: 13,
+          }}
+        >
+          {initials}
+        </Avatar>
+        <Box sx={{ minWidth: 0, flex: 1 }}>
+          <Typography
+            sx={{ fontSize: 13, fontWeight: 600, color: '#FFFFFF', lineHeight: 1.2 }}
+            noWrap
+          >
+            {user?.name || user?.username}
+          </Typography>
+          <Typography
+            sx={{ fontSize: 11, color: 'rgba(160,150,194,1)' }}
+            noWrap
+          >
+            Authenticated
+          </Typography>
+        </Box>
+        <Tooltip title="Sign out">
+          <IconButton
+            onClick={logout}
+            size="small"
+            sx={{
+              width: 34,
+              height: 34,
+              borderRadius: 1,
+              bgcolor: 'rgba(255,255,255,0.08)',
+              color: '#FFFFFF',
+              border: '1px solid rgba(255,255,255,0.10)',
+              '&:hover': { bgcolor: 'rgba(255,255,255,0.14)' },
+            }}
+          >
+            <LogoutIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
       </Box>
     </Box>
   );

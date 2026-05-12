@@ -651,10 +651,10 @@ export default function OverviewTab() {
                     key={c}
                     sx={{
                       fontWeight: 600,
-                      bgcolor: '#f8fafc',
-                      color: 'text.secondary',
+                      bgcolor: '#FBFAFC',
+                      color: '#8A8A8A',
                       fontSize: '0.72rem',
-                      letterSpacing: '0.04em',
+                      letterSpacing: '0.08em',
                       textTransform: 'uppercase',
                     }}
                   >

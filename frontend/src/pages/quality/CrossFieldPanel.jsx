@@ -31,7 +31,7 @@ const FAMILY_COLOR = {
   manual:                { bg: '#f1f5f9', fg: '#475569' },
 };
 
-export default function CrossFieldPanel() {
+export default function CrossFieldPanel({ onAfterFix }) {
   const { refresh } = useDataset();
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -94,8 +94,15 @@ export default function CrossFieldPanel() {
       const { data } = await api.post(`/quality/cross-field/fix/${ruleId}`, { action });
       setToast(`${data.rows_dropped} row(s) dropped — ${data.rows_remaining} remaining`);
       setFailingFor(null);
-      await load();
-      await refresh();
+      // Run the parent's refresh (e.g. Cleansing's loadAll) and the
+      // dataset context refresh in parallel so the row count above
+      // updates immediately — without this the page reads its cached
+      // /quality/config response from before the rows were dropped.
+      await Promise.all([
+        load(),
+        refresh(),
+        onAfterFix ? onAfterFix() : Promise.resolve(),
+      ]);
     } catch (e) {
       setErr(e?.response?.data?.detail || 'Failed to apply fix');
     } finally {

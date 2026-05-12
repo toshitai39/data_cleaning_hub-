@@ -5,6 +5,7 @@ import App from './App.jsx';
 import { theme } from './theme.js';
 import { AuthProvider } from './context/AuthContext.jsx';
 import { DatasetProvider } from './context/DatasetContext.jsx';
+import { ProjectProvider } from './context/ProjectContext.jsx';
 import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
@@ -12,9 +13,11 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <AuthProvider>
-        <DatasetProvider>
-          <App />
-        </DatasetProvider>
+        <ProjectProvider>
+          <DatasetProvider>
+            <App />
+          </DatasetProvider>
+        </ProjectProvider>
       </AuthProvider>
     </ThemeProvider>
   </React.StrictMode>

@@ -17,6 +17,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from .db import init_db  # noqa: E402
 from .routers import (  # noqa: E402  (import after sys.path tweak)
     audit_router,
     auth_router,
@@ -24,6 +25,7 @@ from .routers import (  # noqa: E402  (import after sys.path tweak)
     duplicates_router,
     export_router,
     profile_router,
+    projects_router,
     quality_router,
     rule_generator_router,
 )
@@ -51,6 +53,7 @@ def health() -> dict:
 
 
 app.include_router(auth_router.router)
+app.include_router(projects_router.router)
 app.include_router(data_router.router)
 app.include_router(profile_router.router)
 app.include_router(duplicates_router.router)
@@ -58,3 +61,9 @@ app.include_router(quality_router.router)
 app.include_router(rule_generator_router.router)
 app.include_router(export_router.router)
 app.include_router(audit_router.router)
+
+
+@app.on_event("startup")
+def _on_startup() -> None:
+    """Create the projects table on first run (idempotent)."""
+    init_db()

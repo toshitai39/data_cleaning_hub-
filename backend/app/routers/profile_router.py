@@ -29,6 +29,7 @@ import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from core.drift_detector import (
     delete_baseline as _delete_baseline,
@@ -39,7 +40,9 @@ from core.drift_detector import (
 )
 from core.profiler import DataProfilerEngine
 
+from ..db import get_db
 from ..deps import require_dataframe, scoped_dataframe
+from ..models import Project
 from ..services.ai_validation_engine import (
     AIValidationEngine,
     DynamicValidationDetector,
@@ -53,6 +56,7 @@ from ..services.match_rules import (
 )
 from ..services.dashboard import collect_risk_counts, collect_top_issues
 from ..services.profile_export import build_excel_report, build_json_report
+from ..services.project_storage import save_glossary
 from ..services.semantic_glossary import generate_semantic_glossary
 from ..session_store import SessionData
 
@@ -98,7 +102,10 @@ def _profile_df(df: pd.DataFrame, profiles: Dict[str, Any]) -> pd.DataFrame:
 # ---------- run ----------------------------------------------------------
 
 @router.post("/run")
-def run_profile(sess: SessionData = Depends(require_dataframe)) -> dict:
+def run_profile(
+    sess: SessionData = Depends(require_dataframe),
+    db: Session = Depends(get_db),
+) -> dict:
     """Run profiler and persist column_profiles + quality_report on session."""
     df = scoped_dataframe(sess)
     engine = DataProfilerEngine(df, sess.filename)
@@ -108,6 +115,21 @@ def run_profile(sess: SessionData = Depends(require_dataframe)) -> dict:
         raise HTTPException(status_code=500, detail=f"Profiling failed: {exc}")
     sess.column_profiles = dict(engine.column_profiles)
     sess.quality_report = engine.quality_report
+
+    # Push the quality score + status back to the project row so the
+    # Home page's tiles reflect the latest profile.
+    if sess.active_project_id and engine.quality_report is not None:
+        project = (
+            db.query(Project).filter(Project.id == sess.active_project_id).one_or_none()
+        )
+        if project is not None:
+            score = getattr(engine.quality_report, "overall_score", None)
+            if isinstance(score, (int, float)):
+                project.quality_score = float(score)
+            if project.status in ("empty", "data_loaded", None):
+                project.status = "profiled"
+            db.commit()
+
     return {
         "ok": True,
         "rows": int(len(df)),
@@ -538,6 +560,8 @@ def semantic_glossary_generate(sess: SessionData = Depends(require_dataframe)) -
         raise HTTPException(status_code=500, detail=f"Glossary generation failed: {exc}")
 
     sess.semantic_glossary = glossary
+    if sess.active_project_id:
+        save_glossary(sess.active_project_id, glossary)
     return {
         "ok": True,
         "columns_in_scope": int(df.shape[1]),
@@ -591,10 +615,14 @@ def semantic_glossary_override(
     # Manual override invalidates dependent caches that may have used the
     # previous semantic type when generating rules.
     sess.ai_validation_rules = None
+    if sess.active_project_id:
+        save_glossary(sess.active_project_id, glossary)
     return {"ok": True, "entry": entry}
 
 
 @router.post("/semantic-glossary/clear")
 def semantic_glossary_clear(sess: SessionData = Depends(require_dataframe)) -> dict:
     sess.semantic_glossary = None
+    if sess.active_project_id:
+        save_glossary(sess.active_project_id, None)
     return {"ok": True}

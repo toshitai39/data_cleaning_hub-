@@ -40,8 +40,15 @@ from ..services.rg_report_patched import export_dq_report_to_pdf  # noqa: E402
 
 from pydantic import BaseModel
 
+from sqlalchemy.orm import Session
+
+from ..db import get_db
 from ..deps import require_dataframe, scoped_dataframe
+from ..models import Project
 from ..services.azure_openai_config import AzureOpenAIConfig
+from ..services.dq_rg_mapping import rg_row_to_applied_rule
+from ..services.dq_engine import default_config as _dq_default_config
+from ..services.project_storage import save_dq_config, save_rules
 from ..services.cross_field_engine import _run_llm_expression
 from ..services.rule_generator import (
     evaluate_cross_field_rules_in_df,
@@ -67,6 +74,46 @@ def _safe_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
     return df.to_dict(orient="records")
 
 
+def _sync_rules_into_dq_config(sess: SessionData, df_rules: pd.DataFrame) -> None:
+    """Bridge: every single-column row in ``df_rules`` that translates to
+    a Cleansing operation gets appended into ``sess.dq_config[col]
+    .applied_rules`` (deduped by rule name).
+
+    This is what makes "Add Custom Rule" feel like it actually does
+    something — the moment a rule is created in Rule Generator it shows
+    up on the Cleansing tab under that column, ready to be applied
+    against the data. Cross-field rules are left alone — they don't fit
+    the per-column ``dq_config`` shape and are applied through the
+    Cross-field panel's Drop / Deduplicate buttons instead.
+    """
+    if df_rules is None or df_rules.empty or sess.df is None:
+        return
+
+    cols_in_df = {str(c) for c in sess.df.columns}
+    for _, row in df_rules.iterrows():
+        dim = str(row.get("Dimension", "")).strip()
+        if dim == "Cross-field Validation":
+            continue
+        column = str(row.get("Column", "")).strip()
+        if not column or column not in cols_in_df:
+            continue
+        applied = rg_row_to_applied_rule(row)
+        if applied is None:
+            continue
+        cfg = sess.dq_config.get(column)
+        if cfg is None:
+            cfg = _dq_default_config()
+            sess.dq_config[column] = cfg
+        # Dedupe — don't re-add the same rule on every Generate / Add.
+        existing_names = {r.get("name") for r in cfg.get("applied_rules", [])}
+        if applied.get("name") in existing_names:
+            continue
+        cfg.setdefault("applied_rules", []).append(applied)
+
+    if sess.active_project_id:
+        save_dq_config(sess.active_project_id, sess.dq_config)
+
+
 @router.get("/llm-status")
 def llm_status() -> dict:
     missing = AzureOpenAIConfig.validate()
@@ -74,7 +121,10 @@ def llm_status() -> dict:
 
 
 @router.post("/generate")
-def generate(sess: SessionData = Depends(require_dataframe)) -> dict:
+def generate(
+    sess: SessionData = Depends(require_dataframe),
+    db: Session = Depends(get_db),
+) -> dict:
     """Run the comprehensive engine: deep scan Excel + AI per column + validation + regex enrichment.
 
     Mirrors the Streamlit button "Generate AI Validation Rules" exactly.
@@ -113,6 +163,32 @@ def generate(sess: SessionData = Depends(require_dataframe)) -> dict:
 
     sess.ai_validation_rules = df_rules
 
+    # Bridge to Cleansing — every column rule in the freshly generated
+    # set becomes an applied_rule under that column's dq_config, ready
+    # to be applied with one click on the Cleansing tab.
+    _sync_rules_into_dq_config(sess, df_rules)
+
+    # Reflect generation in the project so Home tiles show "Rules ready",
+    # and persist the rules DataFrame to disk so it survives a server
+    # restart or a project re-open.
+    if sess.active_project_id:
+        save_rules(sess.active_project_id, df_rules)
+        project = (
+            db.query(Project).filter(Project.id == sess.active_project_id).one_or_none()
+        )
+        if project is not None:
+            project.rules_total = int(len(df_rules))
+            if "Issues Found" in df_rules.columns:
+                try:
+                    project.issues_total = int(
+                        df_rules["Issues Found"].fillna(0).astype(int).sum()
+                    )
+                except Exception:
+                    pass
+            if project.status not in ("cleansed", "exported"):
+                project.status = "rules_generated"
+            db.commit()
+
     return {
         "ok": True,
         "total_rules": len(df_rules),
@@ -147,6 +223,8 @@ def get_rules(sess: SessionData = Depends(require_dataframe)) -> dict:
 @router.post("/clear")
 def clear(sess: SessionData = Depends(require_dataframe)) -> dict:
     sess.ai_validation_rules = None
+    if sess.active_project_id:
+        save_rules(sess.active_project_id, None)
     return {"ok": True}
 
 
@@ -154,6 +232,8 @@ def clear(sess: SessionData = Depends(require_dataframe)) -> dict:
 def regenerate(sess: SessionData = Depends(require_dataframe)) -> dict:
     """Streamlit's 'Regenerate Rules' button just clears state — UI calls /generate after."""
     sess.ai_validation_rules = None
+    if sess.active_project_id:
+        save_rules(sess.active_project_id, None)
     return {"ok": True}
 
 
@@ -312,6 +392,11 @@ def add_custom_rule(
     df_rules = enrich_dataframe_regex_patterns(df_rules)
     df_rules = _renumber(df_rules)
     sess.ai_validation_rules = df_rules
+    # Mirror the just-added custom rule into Cleansing so the user can
+    # click into the Cleansing tab and immediately apply it.
+    _sync_rules_into_dq_config(sess, df_rules.tail(1))
+    if sess.active_project_id:
+        save_rules(sess.active_project_id, df_rules)
 
     return {
         "ok": True,
@@ -335,4 +420,6 @@ def delete_rule(
     df = df.drop(df.index[rule_idx]).reset_index(drop=True)
     df = _renumber(df)
     sess.ai_validation_rules = df
+    if sess.active_project_id:
+        save_rules(sess.active_project_id, df)
     return {"ok": True, "total_rules": len(df), "rules": _safe_records(df)}

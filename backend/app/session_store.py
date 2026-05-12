@@ -49,6 +49,12 @@ class SessionData:
     # ``confidence``, and ``source`` (``"ai"`` or ``"manual"``). ``None`` until
     # the user generates it from the AI Validations tab.
     semantic_glossary: Optional[Dict[str, Dict[str, Any]]] = None
+    # The project this session is currently bound to. Every data /
+    # profile / quality / rule-generator endpoint that mutates state
+    # writes against the working DataFrame for this project. ``None``
+    # means the session is unbound and the user must pick or create a
+    # project before the rest of the pipeline can run.
+    active_project_id: Optional[str] = None
     last_access: float = field(default_factory=time.time)
     user: Optional[Dict[str, str]] = None
 

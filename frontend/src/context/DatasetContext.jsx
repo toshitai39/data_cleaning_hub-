@@ -1,11 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import api from '../api.js';
 import { useAuth } from './AuthContext.jsx';
+import { useProject } from './ProjectContext.jsx';
 
 const DatasetContext = createContext(null);
 
 export function DatasetProvider({ children }) {
   const { user } = useAuth();
+  const { active } = useProject();
   const [state, setState] = useState({
     loaded: false,
     filename: null,
@@ -25,9 +27,14 @@ export function DatasetProvider({ children }) {
     }
   }, [user]);
 
+  // Re-fetch dataset state on mount, whenever the user changes (login /
+  // logout), AND whenever the active project changes. The server binds
+  // its in-memory ``sess.df`` to the working parquet on ``GET /projects/{id}``,
+  // so the frontend needs to pull /data/state again to learn that data
+  // has been loaded for the new project.
   useEffect(() => {
     refresh();
-  }, [refresh]);
+  }, [refresh, active?.id]);
 
   return (
     <DatasetContext.Provider value={{ state, refresh }}>

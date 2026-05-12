@@ -61,9 +61,9 @@ export default function HeaderConfigurator({ stagedFile, onLoaded }) {
         <Table size="small" stickyHeader>
           <TableHead>
             <TableRow>
-              <TableCell sx={{ fontWeight: 600, bgcolor: '#f1f5f9' }}>Row</TableCell>
+              <TableCell sx={{ fontWeight: 600, bgcolor: '#FBFAFC' }}>Row</TableCell>
               {cols.map((c) => (
-                <TableCell key={c} sx={{ fontWeight: 600, bgcolor: '#f1f5f9' }}>{c}</TableCell>
+                <TableCell key={c} sx={{ fontWeight: 600, bgcolor: '#FBFAFC' }}>{c}</TableCell>
               ))}
             </TableRow>
           </TableHead>

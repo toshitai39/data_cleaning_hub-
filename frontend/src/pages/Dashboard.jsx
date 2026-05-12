@@ -15,21 +15,33 @@ const SEVERITY_COLORS = {
 };
 
 function Kpi({ label, value }) {
-  // Verbatim port of _kpi() — white card, slate label, blue value.
   return (
     <Box sx={{
-      bgcolor: '#ffffff',
-      border: '1px solid #e2e8f0',
-      borderRadius: 2.5,
-      p: 2,
-      textAlign: 'center',
+      bgcolor: '#FBFAFC',
+      border: '1px solid #E7E6E6',
+      borderRadius: 1.5,
+      px: 2.25,
+      py: 2,
+      minHeight: 86,
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'center',
     }}>
       <Typography sx={{
-        fontSize: '0.72rem', color: '#64748b',
-        textTransform: 'uppercase', letterSpacing: 0.5,
+        fontFamily: "'Open Sans', sans-serif",
+        fontSize: 11,
+        fontWeight: 700,
+        letterSpacing: '0.1em',
+        color: '#8A8A8A',
+        textTransform: 'uppercase',
+        mb: 0.75,
       }}>{label}</Typography>
       <Typography sx={{
-        fontSize: '1.4rem', fontWeight: 700, color: '#1e40af', mt: 0.5,
+        fontFamily: "'Montserrat', sans-serif",
+        fontSize: 26,
+        fontWeight: 700,
+        color: '#1A1A1A',
+        lineHeight: 1,
       }}>{value}</Typography>
     </Box>
   );

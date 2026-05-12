@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Box, Paper, Typography, TextField, InputAdornment, Chip,
+  Box, Typography, TextField, InputAdornment, Chip,
   Checkbox, FormControlLabel, Button, Stack, Divider, Alert, Tooltip,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined';
 import api from '../../api.js';
+import ContentCard from '../../components/ContentCard.jsx';
 
-export default function ColumnsOfInterest() {
+export default function ColumnsOfInterest({ onSaved }) {
   const [allCols, setAllCols] = useState([]);
   const [selected, setSelected] = useState([]);
   const [initialSelected, setInitialSelected] = useState([]);
@@ -70,6 +71,7 @@ export default function ColumnsOfInterest() {
       setInitialSelected(data.selected || []);
       setExplicit(true);
       setSavedAt(new Date());
+      if (onSaved) onSaved(data);
     } catch (e) {
       setError(e?.response?.data?.detail || 'Could not save selection');
     } finally {
@@ -80,7 +82,7 @@ export default function ColumnsOfInterest() {
   if (allCols.length === 0) return null;
 
   return (
-    <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+    <ContentCard sx={{ mb: 2.5, p: 2.5 }}>
       <Stack
         direction={{ xs: 'column', sm: 'row' }}
         alignItems={{ xs: 'flex-start', sm: 'center' }}
@@ -88,15 +90,17 @@ export default function ColumnsOfInterest() {
         spacing={1.5}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <TuneOutlinedIcon color="primary" fontSize="small" />
-          <Box>
-            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-              Columns of interest
-            </Typography>
-            <Typography variant="caption" color="text.secondary">
-              Pick the columns to keep in scope for profiling, rules, and quality checks.
-            </Typography>
-          </Box>
+          <TuneOutlinedIcon sx={{ fontSize: 20, color: '#6A28A8' }} />
+          <Typography
+            sx={{
+              fontFamily: "'Montserrat', sans-serif",
+              fontSize: 16,
+              fontWeight: 700,
+              color: '#1A1A1A',
+            }}
+          >
+            Columns of interest
+          </Typography>
         </Box>
         <Stack direction="row" spacing={1} alignItems="center">
           <Chip
@@ -150,10 +154,10 @@ export default function ColumnsOfInterest() {
         sx={{
           maxHeight: 260,
           overflowY: 'auto',
-          border: '1px solid',
-          borderColor: 'divider',
-          borderRadius: 1,
-          p: 1,
+          border: '1px solid #E7E6E6',
+          borderRadius: 1.5,
+          bgcolor: '#FBFAFC',
+          p: 1.25,
           display: 'grid',
           gridTemplateColumns: {
             xs: '1fr',
@@ -230,6 +234,6 @@ export default function ColumnsOfInterest() {
           {busy ? 'Saving…' : 'Save selection'}
         </Button>
       </Stack>
-    </Paper>
+    </ContentCard>
   );
 }
