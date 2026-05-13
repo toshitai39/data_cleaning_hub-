@@ -197,9 +197,9 @@ export default function Compare() {
             <StatItem label="Original Rows" value={stats.original_rows} />
             <StatItem label="Modified Rows" value={stats.modified_rows} />
             <StatItem label="Row Change" value={stats.row_change} sign />
-            <StatItem label="Original Columns" value={stats.original_columns} />
-            <StatItem label="Modified Columns" value={stats.modified_columns} />
-            <StatItem label="Column Change" value={stats.column_change} sign />
+            <StatItem label="Original Critical Data Elements" value={stats.original_columns} />
+            <StatItem label="Modified Critical Data Elements" value={stats.modified_columns} />
+            <StatItem label="Critical Data Element Change" value={stats.column_change} sign />
             <StatItem label="Modified Cells" value={stats.modified_cells}
               sign={false} />
           </Stack>
@@ -213,11 +213,11 @@ export default function Compare() {
         <Grid container spacing={2} sx={{ mb: 2 }}>
           <Grid item xs={12} md={6}>
             <FormControl fullWidth size="small">
-              <InputLabel>Select columns to compare</InputLabel>
+              <InputLabel>Select critical data elements to compare</InputLabel>
               <Select multiple value={selectedCols}
                 onChange={(e) => setSelectedCols(typeof e.target.value === 'string'
                   ? e.target.value.split(',') : e.target.value)}
-                input={<OutlinedInput label="Select columns to compare" />}
+                input={<OutlinedInput label="Select critical data elements to compare" />}
                 renderValue={(s) => s.join(', ')}>
                 {stats.common_columns.map((c) => (
                   <MenuItem key={c} value={c}>{c}</MenuItem>
@@ -247,11 +247,11 @@ export default function Compare() {
       )}
 
       {stats && stats.common_columns.length === 0 && (
-        <Alert severity="warning">No common columns found between original and modified data</Alert>
+        <Alert severity="warning">No common critical data elements found between original and modified data</Alert>
       )}
 
       {selectedCols.length === 0 && stats && stats.common_columns.length > 0 && (
-        <Alert severity="warning">Please select at least one column to compare</Alert>
+        <Alert severity="warning">Please select at least one critical data element to compare</Alert>
       )}
 
       {loading && <LinearProgress sx={{ mb: 2 }} />}

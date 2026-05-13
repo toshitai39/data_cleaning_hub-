@@ -397,11 +397,18 @@ def scan_with_library_rule(
         groups = scan_exact(sess, resolved)
         dup_type = "exact"
     else:
-        thresh = next(
+        # The engine wants threshold on a 0-100 scale and one of a fixed
+        # set of algorithm tags. Library rules express thresholds as
+        # fractions (0.85) and call out the underlying method (e.g.
+        # token_sort_ratio) — translate both.
+        thresh_raw = next(
             (m.get("threshold", 0.85) for m in rule.get("match_columns", []) if "threshold" in m),
             0.85,
         )
-        groups = scan_fuzzy(sess, resolved, float(thresh), algorithm="token_sort_ratio")
+        thresh_pct = float(thresh_raw)
+        if thresh_pct <= 1.0:
+            thresh_pct *= 100.0
+        groups = scan_fuzzy(sess, resolved, thresh_pct, algorithm="rapidfuzz")
         dup_type = "fuzzy"
 
     return {

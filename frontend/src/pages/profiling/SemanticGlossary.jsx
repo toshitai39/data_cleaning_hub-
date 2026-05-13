@@ -173,7 +173,7 @@ export default function SemanticGlossary() {
       {error && <Alert severity="error" sx={{ mb: 1.5 }}>{error}</Alert>}
 
       {!generated && entries.length === 0 && !busy && (
-        <Alert severity="info">Generate the glossary to map each column to a semantic type.</Alert>
+        <Alert severity="info">Generate the glossary to map each critical data element to a semantic type.</Alert>
       )}
 
       {generated && entries.length > 0 && (
@@ -217,7 +217,7 @@ export default function SemanticGlossary() {
             <Table size="small" stickyHeader>
               <TableHead>
                 <TableRow>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: '#FBFAFC' }}>Column</TableCell>
+                  <TableCell sx={{ fontWeight: 700, bgcolor: '#FBFAFC' }}>Critical data element</TableCell>
                   <TableCell sx={{ fontWeight: 700, bgcolor: '#FBFAFC' }}>Semantic Type</TableCell>
                   <TableCell sx={{ fontWeight: 700, bgcolor: '#FBFAFC' }}>Display Name</TableCell>
                   <TableCell sx={{ fontWeight: 700, bgcolor: '#FBFAFC' }}>Description</TableCell>

@@ -37,3 +37,6 @@ frontend/dist/
 # Backend storage / sessions
 backend/storage/
 backend/__pycache__/
+
+# Personal Claude Code session transcripts
+chat-export/

@@ -157,12 +157,12 @@ export default function Export() {
 
           <Grid item xs={12} md={4}>
             <FormControl fullWidth size="small">
-              <InputLabel>Columns (empty = all)</InputLabel>
+              <InputLabel>Critical data elements (empty = all)</InputLabel>
               <Select multiple value={selectedCols}
                 onChange={(e) => setSelectedCols(typeof e.target.value === 'string'
                   ? e.target.value.split(',') : e.target.value)}
-                input={<OutlinedInput label="Columns (empty = all)" />}
-                renderValue={(s) => s.length === allColumns.length ? 'All columns' : s.join(', ')}>
+                input={<OutlinedInput label="Critical data elements (empty = all)" />}
+                renderValue={(s) => s.length === allColumns.length ? 'All critical data elements' : s.join(', ')}>
                 {allColumns.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
               </Select>
             </FormControl>

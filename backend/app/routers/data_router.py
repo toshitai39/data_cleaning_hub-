@@ -15,10 +15,18 @@ from pydantic import BaseModel
 
 from core.audit_log import log_action
 
+from ..catalog import STREAM_SCHEMAS
 from ..db import get_db
 from ..deps import get_session, require_dataframe
 from ..models import Project
 from ..schemas import CompareResponse, LoadResponse, PreviewResponse
+from ..services.cde_recommender import (
+    CDERecommenderError,
+    column_set_fingerprint as _cde_fingerprint,
+    dtype_fallback_meta as _cde_dtype_fallback,
+    generate_cde_meta as _generate_cde_meta,
+)
+from ..services.llm_rules import llm_available as _llm_available
 from ..services.compare_engine import cell_diff as _cell_diff, stats as _compare_stats
 from ..services.db_connector_service import (
     build_url as _build_url,
@@ -29,6 +37,8 @@ from ..services.db_connector_service import (
 from ..services.loader import load_dataframe, safe_records
 from ..services.project_storage import (
     clear_working,
+    load_cde_meta,
+    save_cde_meta,
     save_glossary,
     save_rules,
     save_scope,
@@ -612,19 +622,243 @@ class ColumnsOfInterestBody(BaseModel):
     selected: List[str]
 
 
-@router.get("/columns-of-interest")
-def get_columns_of_interest(sess: SessionData = Depends(require_dataframe)) -> dict:
-    """Return the full column list plus the user's current selection.
+def _canonical_columns_for_project(project: Optional[Project]) -> List[str]:
+    """Union of ``expected_columns`` across every table in the project's stream.
 
-    If no explicit selection has been stored yet, ``selected`` echoes back the
-    full column list so the UI shows "everything is in scope" by default.
+    Returns an empty list for ``file_upload`` projects or any (system, stream)
+    pair not present in the catalog — in which case the picker falls back to
+    the dataset's actual columns (the legacy behaviour).
     """
-    all_cols = [str(c) for c in sess.df.columns]
-    stored = [c for c in sess.columns_of_interest if c in all_cols]
+    if project is None:
+        return []
+    if project.system_id == "file_upload":
+        return []
+    tables = STREAM_SCHEMAS.get((project.system_id, project.stream_id))
+    if not tables:
+        return []
+    seen: Dict[str, None] = {}
+    for table in tables:
+        for col in table.get("expected_columns", []):
+            if col not in seen:
+                seen[col] = None
+    return list(seen.keys())
+
+
+@router.get("/columns-of-interest")
+def get_columns_of_interest(
+    sess: SessionData = Depends(require_dataframe),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return the picker column list plus the user's current selection.
+
+    For ERP-style projects (system has a catalog entry for the chosen stream)
+    the picker shows the **canonical** column set so the user sees every
+    standard field they could mark as a CDE — including ones missing from
+    their current extract (which are returned with ``in_data=False`` and
+    cannot be selected). For file-upload projects this collapses to the
+    legacy "show whatever's in the dataframe" behaviour.
+    """
+    data_cols = [str(c) for c in sess.df.columns]
+    data_set = set(data_cols)
+
+    project: Optional[Project] = None
+    if sess.active_project_id and sess.user and sess.user.get("username"):
+        project = (
+            db.query(Project)
+            .filter(
+                Project.id == sess.active_project_id,
+                Project.user_username == sess.user["username"],
+            )
+            .one_or_none()
+        )
+
+    canonical = _canonical_columns_for_project(project)
+    if canonical:
+        # Canonical columns first (in catalog order), then any extras the
+        # user happens to have in their extract that aren't in the catalog.
+        canonical_set = set(canonical)
+        extras = [c for c in data_cols if c not in canonical_set]
+        all_cols = canonical + extras
+        in_data_flags = {c: (c in data_set) for c in all_cols}
+        schema = {
+            "system_id": project.system_id,
+            "system_label": project.system_label,
+            "stream_id": project.stream_id,
+            "stream_label": project.stream_label,
+            "is_canonical": True,
+        }
+    else:
+        all_cols = data_cols
+        in_data_flags = {c: True for c in all_cols}
+        schema = {
+            "system_id": project.system_id if project else None,
+            "system_label": project.system_label if project else None,
+            "stream_id": project.stream_id if project else None,
+            "stream_label": project.stream_label if project else None,
+            "is_canonical": False,
+        }
+
+    # Look up cached AI-generated meta. Cache is invalidated automatically when
+    # the column set changes (different fingerprint). A cache that contains
+    # *only* fallback entries (no successful AI rows) is treated as missing
+    # so a previously-poisoned cache can self-heal on the next reload.
+    fingerprint = _cde_fingerprint(all_cols)
+    cached_meta: Optional[Dict[str, Dict[str, Any]]] = None
+    if project is not None:
+        cached_meta = load_cde_meta(project.id, fingerprint)
+        if cached_meta is not None and not any(
+            (v or {}).get("source") == "ai" for v in cached_meta.values()
+        ):
+            cached_meta = None
+
+    if cached_meta is not None:
+        meta: Dict[str, Dict[str, Any]] = {col: dict(cached_meta.get(col, {})) for col in all_cols}
+        glossary_status = "ready"
+    else:
+        # No AI meta yet — return a minimal placeholder so the picker renders
+        # immediately. The frontend will call POST .../generate-glossary which
+        # invokes the LLM and persists the result for subsequent loads.
+        meta = {col: {"description": "", "recommended": False, "source": "pending"} for col in all_cols}
+        glossary_status = "missing"
+
+    # Pre-select strategy:
+    #   1. user has an explicit saved selection → restore it.
+    #   2. AI meta is cached → start with the AI-recommended columns.
+    #   3. otherwise → start with every in-data column (preserves old behaviour
+    #      until the AI run finishes; the frontend will refetch and update).
+    stored = [c for c in sess.columns_of_interest if c in data_set]
+    if stored:
+        default_selected = stored
+    elif glossary_status == "ready":
+        recommended_in_data = [
+            c for c in all_cols
+            if in_data_flags.get(c) and meta.get(c, {}).get("recommended")
+        ]
+        default_selected = recommended_in_data if recommended_in_data else [
+            c for c in all_cols if in_data_flags.get(c)
+        ]
+    else:
+        default_selected = [c for c in all_cols if in_data_flags.get(c)]
+
+    # Stamp the in_data flag into each meta record so the frontend can
+    # disable canonical-but-missing fields with a single lookup.
+    for col in all_cols:
+        meta.setdefault(col, {})["in_data"] = bool(in_data_flags.get(col))
+
     return {
         "all": all_cols,
-        "selected": stored if stored else all_cols,
+        "selected": default_selected,
         "explicit": bool(sess.columns_of_interest),
+        "meta": meta,
+        "schema": schema,
+        "glossary_status": glossary_status,
+        "glossary_fingerprint": fingerprint,
+    }
+
+
+@router.post("/columns-of-interest/generate-glossary")
+def generate_columns_glossary(
+    sess: SessionData = Depends(require_dataframe),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Run the AI recommender for the current dataset and cache the result.
+
+    Called by the picker UI the first time a project is opened (or when the
+    user clicks "Regenerate"). One batched LLM call per ~50 columns; the
+    output is keyed on a column-set fingerprint so re-opening the project
+    later short-circuits straight to the cache.
+    """
+    data_cols = [str(c) for c in sess.df.columns]
+    data_set = set(data_cols)
+
+    project: Optional[Project] = None
+    if sess.active_project_id and sess.user and sess.user.get("username"):
+        project = (
+            db.query(Project)
+            .filter(
+                Project.id == sess.active_project_id,
+                Project.user_username == sess.user["username"],
+            )
+            .one_or_none()
+        )
+
+    canonical = _canonical_columns_for_project(project)
+    if canonical:
+        canonical_set = set(canonical)
+        extras = [c for c in data_cols if c not in canonical_set]
+        all_cols = canonical + extras
+        in_data_flags = {c: (c in data_set) for c in all_cols}
+        schema_hint = {
+            "system_id": project.system_id,
+            "system_label": project.system_label,
+            "stream_id": project.stream_id,
+            "stream_label": project.stream_label,
+        }
+    else:
+        all_cols = data_cols
+        in_data_flags = {c: True for c in all_cols}
+        schema_hint = (
+            {
+                "system_id": project.system_id,
+                "system_label": project.system_label,
+                "stream_id": project.stream_id,
+                "stream_label": project.stream_label,
+            }
+            if project
+            else None
+        )
+
+    # Build a temporary frame whose columns match all_cols so the recommender
+    # can sample even columns that exist only in the canonical schema (it will
+    # get empty samples for canonical-but-missing fields, which is fine —
+    # the LLM still has the name + schema context to reason from).
+    import pandas as _pd
+    frame_cols = {}
+    for col in all_cols:
+        if col in sess.df.columns:
+            frame_cols[col] = sess.df[col]
+        else:
+            frame_cols[col] = _pd.Series([], dtype="object")
+    df_for_llm = _pd.DataFrame(frame_cols)
+
+    fingerprint = _cde_fingerprint(all_cols)
+
+    if not _llm_available():
+        # Credentials missing: hand back the dtype fallback but DO NOT cache —
+        # the moment the user sets up Azure OpenAI, a Regenerate click should
+        # produce real descriptions without hitting a stale cache.
+        meta = _cde_dtype_fallback(df_for_llm)
+        for col in all_cols:
+            meta.setdefault(col, {})["in_data"] = bool(in_data_flags.get(col))
+        return {
+            "ok": True,
+            "meta": meta,
+            "glossary_fingerprint": fingerprint,
+            "glossary_status": "fallback",
+            "warning": (
+                "Azure OpenAI is not configured (AZURE_OPENAI_ENDPOINT / KEY / DEPLOYMENT). "
+                "Showing dtype + sample preview only."
+            ),
+        }
+
+    try:
+        meta = _generate_cde_meta(df_for_llm, schema_hint=schema_hint)
+    except CDERecommenderError as exc:
+        # Real LLM failure — bubble up so the picker shows its Retry alert
+        # with the actual reason. Don't poison the on-disk cache.
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    if project is not None:
+        save_cde_meta(project.id, fingerprint, meta)
+
+    for col in all_cols:
+        meta.setdefault(col, {})["in_data"] = bool(in_data_flags.get(col))
+
+    return {
+        "ok": True,
+        "meta": meta,
+        "glossary_fingerprint": fingerprint,
+        "glossary_status": "ready",
     }
 
 

@@ -46,11 +46,14 @@ def _apply_dq_rules_styling(workbook, worksheet, validation_df: pd.DataFrame) ->
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
     dimension_colors = {
-        "Accuracy": "DBEAFE", "Completeness": "DCFCE7", "Consistency": "FEF3C7",
-        "Validity": "FCE7F3", "Uniqueness": "F3E8FF", "Timeliness": "CCFBF1",
+        "Accuracy": "DBEAFE", "Completeness": "DCFCE7", "Standardisation": "FEF3C7",
+        "Validation": "FCE7F3", "Uniqueness": "F3E8FF", "Timeliness": "CCFBF1",
         "Integrity": "FEE2E2", "Conformity": "E0E7FF", "Reliability": "FFEDD5",
         "Relevance": "ECFCCB", "Precision": "FAE8FF", "Accessibility": "E0F2FE",
         "Character Length": "FDE68A",
+        # Pre-rename names — keep export pretty for old profiles.
+        "Consistency": "FEF3C7",
+        "Validity": "FCE7F3",
     }
     header_fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
     header_font = Font(color="FFFFFF", bold=True, size=11)

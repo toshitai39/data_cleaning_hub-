@@ -137,7 +137,7 @@ function ProjectTile({ project, onOpen, onDelete }) {
         </Box>
         <Box sx={{ flex: 1 }}>
           <Typography sx={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.1em', color: '#8A8A8A', textTransform: 'uppercase' }}>
-            Columns
+            Critical data elements
           </Typography>
           <Typography
             sx={{

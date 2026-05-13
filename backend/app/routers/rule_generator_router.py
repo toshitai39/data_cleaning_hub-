@@ -58,8 +58,11 @@ from ..services.rule_generator import (
 from ..session_store import SessionData
 
 _VALID_DIMENSIONS = {
-    "Accuracy", "Completeness", "Consistency", "Validity",
+    "Accuracy", "Completeness", "Standardisation", "Validation",
     "Uniqueness", "Timeliness", "Cross-field Validation",
+    # Pre-rename aliases — accept rules persisted before the 2026-05
+    # Consistency→Standardisation / Validity→Validation rename.
+    "Consistency", "Validity",
 }
 
 logger = logging.getLogger(__name__)
@@ -144,7 +147,7 @@ def generate(
     if df_in_scope is None or df_in_scope.shape[1] == 0:
         raise HTTPException(
             status_code=400,
-            detail="No columns are in scope. Select at least one column under 'Columns of interest' on Load Data.",
+            detail="No columns are in scope. Select at least one Critical Data Element on Load Data.",
         )
 
     progress_log: List[Dict[str, Any]] = []

@@ -36,7 +36,7 @@ export default function MatchRulesTab() {
             <TableRow>
               <TableCell sx={{ fontWeight: 600 }}>Rule No</TableCell>
               <TableCell sx={{ fontWeight: 600 }}>Rule Type</TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>Columns</TableCell>
+              <TableCell sx={{ fontWeight: 600 }}>Critical Data Elements</TableCell>
               <TableCell sx={{ fontWeight: 600 }}>Match Probability</TableCell>
               <TableCell sx={{ fontWeight: 600 }}>Rationale</TableCell>
             </TableRow>

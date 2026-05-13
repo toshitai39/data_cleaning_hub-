@@ -123,7 +123,7 @@ function DTypeDonut({ distribution }) {
 
 function NullBar({ topNull }) {
   if (!topNull || topNull.length === 0) {
-    return <Alert severity="success">No missing values in any column.</Alert>;
+    return <Alert severity="success">No missing values in any critical data element.</Alert>;
   }
   // Streamlit uses autorange: reversed on the y-axis so the highest is on top.
   return (
@@ -185,7 +185,7 @@ export default function Dashboard() {
               <Kpi label="Rows" value={(data.rows ?? 0).toLocaleString()} />
             </Grid>
             <Grid item xs={6} sm={4} md={2}>
-              <Kpi label="Columns" value={data.columns ?? 0} />
+              <Kpi label="Critical data elements" value={data.columns ?? 0} />
             </Grid>
             <Grid item xs={6} sm={4} md={2}>
               <Kpi label="Missing Cells" value={(data.missing_cells ?? 0).toLocaleString()} />
@@ -233,7 +233,7 @@ export default function Dashboard() {
             </Grid>
             <Grid item xs={12} md={6}>
               <Paper sx={{ p: 2 }}>
-                <Typography variant="h6" gutterBottom>Top Missing-Value Columns</Typography>
+                <Typography variant="h6" gutterBottom>Top Missing-Value Critical Data Elements</Typography>
                 <NullBar topNull={data.top_null_columns} />
               </Paper>
             </Grid>
@@ -242,7 +242,7 @@ export default function Dashboard() {
           {/* Risk overview — only when profiles available */}
           {data.has_profiles && (
             <>
-              <Typography variant="h6" sx={{ mt: 3, mb: 1.5 }}>Column Risk Overview</Typography>
+              <Typography variant="h6" sx={{ mt: 3, mb: 1.5 }}>Critical Data Element Risk Overview</Typography>
               <Grid container spacing={2}>
                 <Grid item xs={4}>
                   <Paper sx={{ p: 2.5, textAlign: 'center' }}>

@@ -9,7 +9,6 @@ import EmptyState from '../components/EmptyState.jsx';
 import { useDataset } from '../context/DatasetContext.jsx';
 import KpiBar from './profiling/KpiBar.jsx';
 import OverviewTab from './profiling/OverviewTab.jsx';
-import ColumnProfilesTab from './profiling/ColumnProfilesTab.jsx';
 import DriftTab from './profiling/DriftTab.jsx';
 import MatchRulesTab from './profiling/MatchRulesTab.jsx';
 import ExportTab from './profiling/ExportTab.jsx';
@@ -46,7 +45,7 @@ export default function DataProfiling() {
   if (!state.loaded) {
     return (
       <>
-        <PageHeader title="Data Profiling" subtitle="Per-column quality and risk analysis" />
+        <PageHeader title="Data Profiling" subtitle="Per critical-data-element quality and risk analysis" />
         <EmptyState />
       </>
     );
@@ -68,7 +67,7 @@ export default function DataProfiling() {
 
       {!profiled && !busy && (
         <Alert severity="info">
-          Click <b>Run Profile</b> to compute column statistics, then explore the tabs below.
+          Click <b>Run Profile</b> to compute critical data element statistics, then explore the tabs below.
         </Alert>
       )}
 
@@ -78,7 +77,6 @@ export default function DataProfiling() {
           <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
             <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto">
               <Tab label="Overview" />
-              <Tab label="Column Profiles" />
               <Tab label="Data Glossary" />
               <Tab label="Data Drift" />
               <Tab label="Match Rules" />
@@ -87,11 +85,10 @@ export default function DataProfiling() {
           </Box>
           <Box sx={{ pt: 2 }}>
             {tab === 0 && <OverviewTab />}
-            {tab === 1 && <ColumnProfilesTab />}
-            {tab === 2 && <AiRulesTab />}
-            {tab === 3 && <DriftTab />}
-            {tab === 4 && <MatchRulesTab />}
-            {tab === 5 && <ExportTab />}
+            {tab === 1 && <AiRulesTab />}
+            {tab === 2 && <DriftTab />}
+            {tab === 3 && <MatchRulesTab />}
+            {tab === 4 && <ExportTab />}
           </Box>
         </>
       )}

@@ -21,14 +21,18 @@ import EmptyState from '../components/EmptyState.jsx';
 import { useDataset } from '../context/DatasetContext.jsx';
 
 // Seven DQ dimensions — single muted palette, no clashing pastels.
+// Pre-rename keys (Consistency, Validity) are kept as aliases so rules
+// persisted before the 2026-05 rename still render with the same color.
 const DIMENSION_PALETTE = {
   Accuracy:                  { fg: '#1e3a8a', tint: '#eef2ff', dot: '#3b82f6' },
   Completeness:              { fg: '#14532d', tint: '#f0fdf4', dot: '#16a34a' },
-  Consistency:               { fg: '#713f12', tint: '#fefce8', dot: '#ca8a04' },
-  Validity:                  { fg: '#581c87', tint: '#faf5ff', dot: '#9333ea' },
+  Standardisation:           { fg: '#713f12', tint: '#fefce8', dot: '#ca8a04' },
+  Validation:                { fg: '#581c87', tint: '#faf5ff', dot: '#9333ea' },
   Uniqueness:                { fg: '#0c4a6e', tint: '#f0f9ff', dot: '#0284c7' },
   Timeliness:                { fg: '#134e4a', tint: '#f0fdfa', dot: '#0d9488' },
   'Cross-field Validation':  { fg: '#7c2d12', tint: '#fff7ed', dot: '#ea580c' },
+  Consistency:               { fg: '#713f12', tint: '#fefce8', dot: '#ca8a04' },
+  Validity:                  { fg: '#581c87', tint: '#faf5ff', dot: '#9333ea' },
 };
 const DIMENSION_FALLBACK = { fg: '#475569', tint: '#f1f5f9', dot: '#64748b' };
 const dimensionStyle = (dim) => DIMENSION_PALETTE[dim] || DIMENSION_FALLBACK;
@@ -93,7 +97,7 @@ export default function RuleGenerator() {
   const [customBusy, setCustomBusy] = useState(false);
   const [customErr, setCustomErr] = useState('');
   const blankCustom = {
-    dimension: 'Validity',
+    dimension: 'Validation',
     column: '',
     columns: [],
     data_quality_rule: '',
@@ -185,7 +189,9 @@ export default function RuleGenerator() {
         dimension: customForm.dimension,
         data_quality_rule: customForm.data_quality_rule,
         regex_pattern: customForm.regex_pattern || '',
-        validation_expression: customForm.validation_expression || '',
+        // No client-side pandas authoring anymore — backend engine
+        // resolves cross-field rules via family parsers + LLM translator.
+        validation_expression: '',
         ...(isCross
           ? { columns: customForm.columns }
           : { column: customForm.column }),
@@ -276,7 +282,7 @@ AZURE_OPENAI_MAX_RPM=60`}
   // doesn't want to see all 7 dimensions at once, just one at a time.
   const dimOrder = useMemo(
     () => [
-      'Accuracy', 'Completeness', 'Consistency', 'Validity',
+      'Accuracy', 'Completeness', 'Standardisation', 'Validation',
       'Uniqueness', 'Timeliness', 'Cross-field Validation',
     ],
     [],
@@ -308,7 +314,7 @@ AZURE_OPENAI_MAX_RPM=60`}
           icon={<InfoOutlinedIcon fontSize="inherit" />}
           sx={{ mb: 2 }}
         >
-          Scope: <b>{scope.selected.length}</b> / <b>{scope.all.length}</b> columns
+          Scope: <b>{scope.selected.length}</b> / <b>{scope.all.length}</b> critical data elements
           {' · '}
           Glossary: <b>{glossary.generated ? `${glossary.count} entries` : 'not generated'}</b>
         </Alert>
@@ -370,7 +376,7 @@ AZURE_OPENAI_MAX_RPM=60`}
         <>
           <Grid container spacing={1.5} sx={{ mb: 2 }}>
             <Grid item xs={4}><MetricCard label="Total Rules" value={stats.total_rules} /></Grid>
-            <Grid item xs={4}><MetricCard label="Columns Covered" value={stats.columns_covered} /></Grid>
+            <Grid item xs={4}><MetricCard label="Critical Data Elements Covered" value={stats.columns_covered} /></Grid>
             <Grid item xs={4}>
               <MetricCard
                 label="DQ Dimensions"
@@ -503,7 +509,7 @@ AZURE_OPENAI_MAX_RPM=60`}
                   },
                 }}>
                   <TableCell sx={{ width: 56 }}>#</TableCell>
-                  <TableCell>Column</TableCell>
+                  <TableCell>Critical Data Element</TableCell>
                   <TableCell>Business Field</TableCell>
                   <TableCell sx={{ width: 110 }}>Source</TableCell>
                   <TableCell sx={{ width: 150 }}>Dimension</TableCell>
@@ -657,7 +663,7 @@ AZURE_OPENAI_MAX_RPM=60`}
               onChange={(e) => setCustomForm((f) => ({ ...f, dimension: e.target.value }))}
               fullWidth
             >
-              {['Accuracy', 'Completeness', 'Consistency', 'Validity',
+              {['Accuracy', 'Completeness', 'Standardisation', 'Validation',
                 'Uniqueness', 'Timeliness', 'Cross-field Validation'].map((d) => (
                 <MenuItem key={d} value={d}>{d}</MenuItem>
               ))}
@@ -671,7 +677,7 @@ AZURE_OPENAI_MAX_RPM=60`}
                 value={customForm.columns}
                 onChange={(_, v) => setCustomForm((f) => ({ ...f, columns: v }))}
                 renderInput={(params) => (
-                  <TextField {...params} label="Columns (pick 2 or more)" />
+                  <TextField {...params} label="Critical data elements (pick 2 or more)" />
                 )}
               />
             ) : (
@@ -681,7 +687,7 @@ AZURE_OPENAI_MAX_RPM=60`}
                 value={customForm.column || null}
                 onChange={(_, v) => setCustomForm((f) => ({ ...f, column: v || '' }))}
                 renderInput={(params) => (
-                  <TextField {...params} label="Column" />
+                  <TextField {...params} label="Critical data element" />
                 )}
               />
             )}
@@ -698,17 +704,13 @@ AZURE_OPENAI_MAX_RPM=60`}
             />
 
             {customForm.dimension === 'Cross-field Validation' && (
-              <TextField
-                size="small"
-                label="Validation expression (pandas boolean Series)"
-                placeholder="(df['gross'] - (df['net'] + df['tax'])).abs() > 0.01"
-                value={customForm.validation_expression}
-                onChange={(e) => setCustomForm((f) => ({ ...f, validation_expression: e.target.value }))}
-                fullWidth
-                multiline
-                minRows={2}
-                helperText="Expression must return a boolean pandas Series where True marks failing rows. Sandboxed: df, pd, np, str, int, float, bool, len, abs."
-              />
+              <Alert severity="info" icon={<InfoOutlinedIcon fontSize="inherit" />}>
+                Write the rule in natural language above. The engine will
+                resolve it — composite uniqueness, conditional presence,
+                prefix derivation, and arithmetic identities are all
+                recognised automatically. Anything outside those falls back
+                to the AI translator.
+              </Alert>
             )}
 
             {customErr && <Alert severity="error">{customErr}</Alert>}

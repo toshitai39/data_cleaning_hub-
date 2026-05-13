@@ -105,6 +105,10 @@ def scope_path(project_id: str) -> Path:
     return project_dir(project_id) / "scope.json"
 
 
+def cde_meta_path(project_id: str) -> Path:
+    return project_dir(project_id) / "cde_meta.json"
+
+
 def save_rules(project_id: str, df_rules: Optional[pd.DataFrame]) -> None:
     """Persist the rules DataFrame. ``None`` deletes any existing file."""
     p = rules_path(project_id)
@@ -174,6 +178,52 @@ def load_scope(project_id: str) -> List[str]:
     except Exception as exc:
         logger.error("load_scope(%s) failed: %s", project_id, exc)
         return []
+
+
+def save_cde_meta(
+    project_id: str,
+    fingerprint: str,
+    meta: Optional[Dict[str, Dict[str, Any]]],
+) -> None:
+    """Persist the AI-generated per-column CDE descriptions + recommendations.
+
+    The on-disk shape is ``{"fingerprint": "...", "meta": {col: {...}}}`` so
+    a reload can detect when the column set has drifted from what the meta
+    was generated for, and discard the stale entry.
+    """
+    p = cde_meta_path(project_id)
+    try:
+        if not meta:
+            if p.exists():
+                p.unlink()
+            return
+        p.write_text(
+            json.dumps({"fingerprint": fingerprint, "meta": meta}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        logger.error("save_cde_meta(%s) failed: %s", project_id, exc)
+
+
+def load_cde_meta(
+    project_id: str,
+    expected_fingerprint: str,
+) -> Optional[Dict[str, Dict[str, Any]]]:
+    """Return cached CDE meta IFF its fingerprint matches the current dataset."""
+    p = cde_meta_path(project_id)
+    if not p.exists():
+        return None
+    try:
+        payload = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.error("load_cde_meta(%s) failed: %s", project_id, exc)
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("fingerprint") != expected_fingerprint:
+        return None
+    meta = payload.get("meta")
+    return meta if isinstance(meta, dict) else None
 
 
 def dq_config_path(project_id: str) -> Path:

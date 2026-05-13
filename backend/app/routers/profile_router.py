@@ -548,7 +548,7 @@ def semantic_glossary_generate(sess: SessionData = Depends(require_dataframe)) -
     if df is None or df.shape[1] == 0:
         raise HTTPException(
             status_code=400,
-            detail="No columns are in scope. Select at least one column under 'Columns of interest' on Load Data.",
+            detail="No columns are in scope. Select at least one Critical Data Element on Load Data.",
         )
 
     try:

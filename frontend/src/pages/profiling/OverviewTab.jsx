@@ -468,12 +468,12 @@ export default function OverviewTab() {
       <Typography sx={sectionHeaderSx}>Data Completeness Analysis</Typography>
       <Grid container spacing={3}>
         <Grid item xs={12} md={6}>
-          <ChartCard title="Non-Null Count by Column" subtitle="Sorted by populated values">
+          <ChartCard title="Non-Null Count by Critical Data Element" subtitle="Sorted by populated values">
             <PlotlyChart {...chart1} height={420} />
           </ChartCard>
         </Grid>
         <Grid item xs={12} md={6}>
-          <ChartCard title="Non-Null vs Null Distribution" subtitle="Stacked composition per column">
+          <ChartCard title="Non-Null vs Null Distribution" subtitle="Stacked composition per critical data element">
             <PlotlyChart {...chart2} height={420} />
           </ChartCard>
         </Grid>
@@ -482,12 +482,12 @@ export default function OverviewTab() {
       <Typography sx={sectionHeaderSx}>Data Distribution Patterns</Typography>
       <Grid container spacing={3}>
         <Grid item xs={12} md={6}>
-          <ChartCard title="Unique Count Distribution" subtitle="Top columns by distinct values">
+          <ChartCard title="Unique Count Distribution" subtitle="Top critical data elements by distinct values">
             <PlotlyChart {...chart3} height={420} />
           </ChartCard>
         </Grid>
         <Grid item xs={12} md={6}>
-          <ChartCard title="Unique vs Duplicate Counts" subtitle="Composition of each column">
+          <ChartCard title="Unique vs Duplicate Counts" subtitle="Composition of each critical data element">
             <PlotlyChart {...chart4} height={420} />
           </ChartCard>
         </Grid>
@@ -496,7 +496,7 @@ export default function OverviewTab() {
       <Typography sx={sectionHeaderSx}>Trend &amp; Pattern Analysis</Typography>
       <Grid container spacing={3}>
         <Grid item xs={12} md={6}>
-          <ChartCard title="Risk Score Trend" subtitle="Per-column risk rating">
+          <ChartCard title="Risk Score Trend" subtitle="Per critical-data-element risk rating">
             <PlotlyChart {...chart5} height={420} />
           </ChartCard>
         </Grid>
@@ -515,7 +515,7 @@ export default function OverviewTab() {
           </ChartCard>
         </Grid>
         <Grid item xs={12} md={6}>
-          <ChartCard title="Risk Score Heatmap" subtitle="Per-column risk intensity">
+          <ChartCard title="Risk Score Heatmap" subtitle="Per critical-data-element risk intensity">
             <PlotlyChart {...chart8} height={420} />
           </ChartCard>
         </Grid>
@@ -543,7 +543,7 @@ export default function OverviewTab() {
           </ChartCard>
         </Grid>
         <Grid item xs={12} md={6}>
-          <ChartCard title="Risk Level Breakdown" subtitle="Columns by risk bucket">
+          <ChartCard title="Risk Level Breakdown" subtitle="Critical data elements by risk bucket">
             <PlotlyChart {...chart12} height={420} />
           </ChartCard>
         </Grid>
@@ -609,8 +609,8 @@ export default function OverviewTab() {
                 <Table size="small">
                   <TableHead>
                     <TableRow>
-                      <TableCell sx={{ fontWeight: 600 }}>Column A</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>Column B</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Critical Data Element A</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Critical Data Element B</TableCell>
                       <TableCell sx={{ fontWeight: 600 }} align="right">Correlation</TableCell>
                     </TableRow>
                   </TableHead>

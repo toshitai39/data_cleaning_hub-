@@ -101,7 +101,7 @@ export default function DuplicateResults({
               <TableCell sx={{ fontWeight: 600 }}>Rows</TableCell>
               <TableCell sx={{ fontWeight: 600 }}>Similarity</TableCell>
               <TableCell sx={{ fontWeight: 600 }}>Match Type</TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>Key Columns</TableCell>
+              <TableCell sx={{ fontWeight: 600 }}>Key critical data elements</TableCell>
               <TableCell sx={{ fontWeight: 600 }}>Preview</TableCell>
             </TableRow>
           </TableHead>

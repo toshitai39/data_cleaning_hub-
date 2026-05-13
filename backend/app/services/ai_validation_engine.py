@@ -29,7 +29,7 @@ class AIValidationEngine:
     """Mirror of features/profiling/ui.py AIValidationEngine (lines 179-617)."""
 
     DQ_DIMENSIONS = [
-        "Accuracy", "Completeness", "Consistency", "Validity",
+        "Accuracy", "Completeness", "Standardisation", "Validation",
         "Uniqueness", "Timeliness", "Integrity", "Conformity",
         "Reliability", "Relevance", "Precision", "Accessibility",
         "Character Length",
@@ -143,7 +143,7 @@ Return a JSON object with this exact structure:
   "business_field_name": "Human-friendly field name (e.g., 'Posting Date', 'Email Address', 'Mobile Number')",
   "rules": [
     {{
-      "dimension": "One of: Accuracy, Completeness, Consistency, Validity, Uniqueness, Timeliness, Integrity, Conformity, Reliability, Relevance, Precision, Accessibility, Character Length",
+      "dimension": "One of: Accuracy, Completeness, Standardisation, Validation, Uniqueness, Timeliness, Integrity, Conformity, Reliability, Relevance, Precision, Accessibility, Character Length",
       "rule_statement": "Human readable rule in format: [Field Name] + Must/Should + Business Condition. Example: 'Posting Date must not be future dated'"
     }}
   ]
@@ -240,15 +240,15 @@ Return ONLY valid JSON, no markdown."""
             rules.append({"dimension": "Uniqueness",
                           "rule_statement": f"{field_name} must be unique"})
         if "date" in data_type.lower():
-            rules.append({"dimension": "Validity",
+            rules.append({"dimension": "Validation",
                           "rule_statement": f"{field_name} must be a valid calendar date"})
             rules.append({"dimension": "Timeliness",
                           "rule_statement": f"{field_name} must not be future dated"})
         elif "int" in data_type.lower() or "float" in data_type.lower():
-            rules.append({"dimension": "Validity",
+            rules.append({"dimension": "Validation",
                           "rule_statement": f"{field_name} must be numeric"})
         elif "object" in data_type.lower():
-            rules.append({"dimension": "Validity",
+            rules.append({"dimension": "Validation",
                           "rule_statement": f"{field_name} must contain valid text"})
         return {"business_field_name": field_name, "rules": rules}
 
@@ -270,9 +270,9 @@ Return ONLY valid JSON, no markdown."""
         rules: List[Dict[str, Any]] = []
         field_name = ai_analysis.get("business_field_name", column_name)
         for rule in ai_analysis.get("rules", []):
-            dimension = rule.get("dimension", "Validity")
+            dimension = rule.get("dimension", "Validation")
             if dimension not in self.DQ_DIMENSIONS:
-                dimension = "Validity"
+                dimension = "Validation"
             rules.append({
                 "S.No": len(rules) + 1,
                 "Column": column_name,
@@ -409,14 +409,14 @@ class DynamicValidationDetector:
         if "int" in dtype_lower or "float" in dtype_lower:
             rules.append({
                 "S.No": len(rules) + 1, "Column": column_name, "Business Field": column_name,
-                "Dimension": "Validity",
+                "Dimension": "Validation",
                 "Data Quality Rule": f"{column_name} must be numeric",
                 "Source": "AI Generated",
             })
         elif "date" in dtype_lower:
             rules.append({
                 "S.No": len(rules) + 1, "Column": column_name, "Business Field": column_name,
-                "Dimension": "Validity",
+                "Dimension": "Validation",
                 "Data Quality Rule": f"{column_name} must be a valid date",
                 "Source": "AI Generated",
             })

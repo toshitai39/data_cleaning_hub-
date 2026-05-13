@@ -76,6 +76,14 @@ export const theme = createTheme({
             background: 'linear-gradient(135deg, #2A124A 0%, #492079 50%, #B31E7C 100%)',
             boxShadow: '0 4px 14px rgba(73,32,121,0.30)',
           },
+          // Default MUI disabled state on the purple gradient renders as
+          // unreadable dark-grey-on-dark. Force a neutral light-grey treatment
+          // so every disabled primary button across the app stays legible.
+          '&.Mui-disabled': {
+            background: '#E7E6E6',
+            color: '#8A8A8A',
+            boxShadow: 'none',
+          },
         },
         outlined: { borderColor: UNIQUS.border },
       },

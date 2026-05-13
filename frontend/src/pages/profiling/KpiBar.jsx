@@ -5,7 +5,7 @@ export default function KpiBar({ kpi }) {
   if (!kpi) return null;
   const cells = [
     { label: 'Rows', value: kpi.rows.toLocaleString(), accent: true },
-    { label: 'Columns', value: kpi.columns },
+    { label: 'Critical data elements', value: kpi.columns },
     { label: 'Quality', value: `${kpi.quality_pct.toFixed(0)}%` },
     { label: 'Completeness', value: `${kpi.completeness_pct.toFixed(1)}%` },
     { label: 'Missing', value: kpi.missing_cells.toLocaleString() },

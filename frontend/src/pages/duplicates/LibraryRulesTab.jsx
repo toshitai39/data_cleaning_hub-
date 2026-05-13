@@ -222,7 +222,7 @@ export default function LibraryRulesTab() {
           {bulkSummary.groupsMerged === 1 ? '' : 's'}, dropped <b>{bulkSummary.rowsDropped}</b> row
           {bulkSummary.rowsDropped === 1 ? '' : 's'}.
           {bulkSummary.rulesSkipped > 0 && (
-            <> Skipped <b>{bulkSummary.rulesSkipped}</b> rule{bulkSummary.rulesSkipped === 1 ? '' : 's'} that needed column mapping.</>
+            <> Skipped <b>{bulkSummary.rulesSkipped}</b> rule{bulkSummary.rulesSkipped === 1 ? '' : 's'} that needed critical data element mapping.</>
           )}
         </Alert>
       )}
@@ -245,7 +245,7 @@ export default function LibraryRulesTab() {
               <TableRow>
                 <TableCell sx={{ fontWeight: 700 }}>Rule</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>Match strategy</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Columns</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Critical data elements</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>Survivorship</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>Action</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>Severity</TableCell>
@@ -392,14 +392,30 @@ export default function LibraryRulesTab() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {(scanResult.summaries || []).map((g) => (
+                {(scanResult.summaries || []).map((g) => {
+                  const memberCount = g.rows ?? g.row_count ?? g.indices?.length ?? 0;
+                  const matchKey = g.representative || g.match_key || g.match_value || '';
+                  const keyCols = Array.isArray(g.key_columns) ? g.key_columns.join(' + ') : '';
+                  return (
                   <TableRow key={g.group_id} hover>
                     <TableCell sx={{ fontFamily: 'ui-monospace, Menlo, monospace' }}>
                       #{g.group_id}
                     </TableCell>
-                    <TableCell>{g.indices?.length ?? g.row_count ?? 0}</TableCell>
+                    <TableCell>{memberCount}</TableCell>
                     <TableCell sx={{ fontSize: '0.78rem', color: '#555555' }}>
-                      {g.match_key || g.match_value || ''}
+                      <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                        {keyCols && (
+                          <Typography sx={{ fontSize: '0.7rem', color: '#8A8A8A', fontFamily: 'ui-monospace, Menlo, monospace' }}>
+                            {keyCols}
+                          </Typography>
+                        )}
+                        <Typography
+                          sx={{ fontSize: '0.78rem', color: '#1A1A1A', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 360 }}
+                          title={matchKey}
+                        >
+                          {matchKey || <em style={{ color: '#8A8A8A' }}>—</em>}
+                        </Typography>
+                      </Box>
                     </TableCell>
                     <TableCell>
                       <Button
@@ -418,7 +434,8 @@ export default function LibraryRulesTab() {
                       </Button>
                     </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
                 {(!scanResult.summaries || scanResult.summaries.length === 0) && (
                   <TableRow>
                     <TableCell colSpan={4} align="center" sx={{ py: 3, color: '#8A8A8A' }}>

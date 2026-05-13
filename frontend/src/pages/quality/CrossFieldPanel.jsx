@@ -169,7 +169,7 @@ export default function CrossFieldPanel({ onAfterFix }) {
           <Table size="small">
             <TableHead>
               <TableRow>
-                <TableCell sx={{ fontWeight: 600, minWidth: 200 }}>Columns</TableCell>
+                <TableCell sx={{ fontWeight: 600, minWidth: 200 }}>Critical data elements</TableCell>
                 <TableCell sx={{ fontWeight: 600 }}>Rule</TableCell>
                 <TableCell sx={{ fontWeight: 600, width: 160 }}>Family</TableCell>
                 <TableCell sx={{ fontWeight: 600, minWidth: 220 }}>Validation Expression</TableCell>

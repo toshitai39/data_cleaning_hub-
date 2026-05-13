@@ -34,10 +34,10 @@ export default function CombinedTab({ allColumns, objectColumns }) {
       <Grid container spacing={2} sx={{ mb: 2 }}>
         <Grid item xs={12} md={6}>
           <FormControl fullWidth size="small">
-            <InputLabel>Exact match columns</InputLabel>
+            <InputLabel>Exact match critical data elements</InputLabel>
             <Select multiple value={exactCols}
               onChange={(e) => setExactCols(typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value)}
-              input={<OutlinedInput label="Exact match columns" />}
+              input={<OutlinedInput label="Exact match critical data elements" />}
               renderValue={(s) => s.join(', ')}>
               {allColumns.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
             </Select>
@@ -45,10 +45,10 @@ export default function CombinedTab({ allColumns, objectColumns }) {
         </Grid>
         <Grid item xs={12} md={6}>
           <FormControl fullWidth size="small">
-            <InputLabel>Fuzzy match columns</InputLabel>
+            <InputLabel>Fuzzy match critical data elements</InputLabel>
             <Select multiple value={fuzzyCols}
               onChange={(e) => setFuzzyCols(typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value)}
-              input={<OutlinedInput label="Fuzzy match columns" />}
+              input={<OutlinedInput label="Fuzzy match critical data elements" />}
               renderValue={(s) => s.join(', ')}>
               {objectColumns.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
             </Select>

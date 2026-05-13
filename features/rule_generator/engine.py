@@ -182,34 +182,38 @@ def _ensure_regex_pattern(rule: Dict[str, Any], metadata: Dict[str, Any]) -> Non
         return
     dim = rule.get("dimension", "")
     rule_text = str(rule.get("data_quality_rule", "")).lower()
-    if dim == "Validity" and "character" in rule_text and metadata.get("max_length") is not None:
+    if dim == "Validation" and "character" in rule_text and metadata.get("max_length") is not None:
         n = int(metadata["max_length"])
         rule["regex_pattern"] = f"^.{0,{n}}$"
 
 
 _ALLOWED_DIMENSIONS = (
-    "Accuracy", "Completeness", "Consistency", "Validity", "Uniqueness",
+    "Accuracy", "Completeness", "Standardisation", "Validation", "Uniqueness",
     "Timeliness", "Cross-field Validation",
 )
 _LEGACY_DIMENSION_MAP = {
-    "conformity": "Validity",
-    "character length": "Validity",
-    "integrity": "Consistency",
+    "conformity": "Validation",
+    "character length": "Validation",
+    "integrity": "Standardisation",
     "reliability": "Accuracy",
     "relevance": "Accuracy",
     "precision": "Accuracy",
-    "accessibility": "Validity",
+    "accessibility": "Validation",
+    # Pre-rename display names — keep rules saved on disk readable after the
+    # 2026-05 Consistency→Standardisation / Validity→Validation rename.
+    "validity": "Validation",
+    "consistency": "Standardisation",
 }
 
 
 def _normalize_dimension(value: Any) -> str:
     raw = str(value or "").strip()
     if not raw:
-        return "Validity"
+        return "Validation"
     for d in _ALLOWED_DIMENSIONS:
         if raw.lower() == d.lower():
             return d
-    return _LEGACY_DIMENSION_MAP.get(raw.lower(), "Validity")
+    return _LEGACY_DIMENSION_MAP.get(raw.lower(), "Validation")
 
 
 def post_process_rules(rules: List[Dict[str, Any]], metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -217,8 +221,8 @@ def post_process_rules(rules: List[Dict[str, Any]], metadata: Dict[str, Any]) ->
 
     Applies these transformations:
     1. Coerce every dimension into one of the six standard DQ dimensions
-       (Accuracy, Completeness, Consistency, Validity, Uniqueness, Timeliness).
-    2. Length / format / pattern rules are kept under Validity.
+       (Accuracy, Completeness, Standardisation, Validation, Uniqueness, Timeliness).
+    2. Length / format / pattern rules are kept under Validation.
     3. Ensure human-readable formatting for length constraints.
     4. Ensure a Completeness rule exists for mandatory fields.
     5. Fill ``regex_pattern`` when inferable from metadata.
@@ -237,7 +241,7 @@ def post_process_rules(rules: List[Dict[str, Any]], metadata: Dict[str, Any]) ->
         is_length_rule = any(k.lower() in rule_text.lower() for k in char_keywords)
 
         if is_length_rule and 'character' in rule_text.lower():
-            rule['dimension'] = 'Validity'
+            rule['dimension'] = 'Validation'
             has_length_rule = True
             if metadata.get('max_length'):
                 field_name = rule.get('business_field', '')
@@ -268,7 +272,7 @@ def post_process_rules(rules: List[Dict[str, Any]], metadata: Dict[str, Any]) ->
         n = int(metadata['max_length'])
         processed_rules.append({
             'business_field': field_name,
-            'dimension': 'Validity',
+            'dimension': 'Validation',
             'data_quality_rule': f"{field_name} should be maximum {metadata['max_length']} characters",
             'issues_found': 0,
             'issues_found_example': 'All values valid - No issues found',
@@ -583,11 +587,11 @@ variations, no legacy labels:
    - Fields marked with * (asterisk), keywords: mandatory, required, not null
    - Rule format: "[Field Name] must not be blank"
 
-2. **Validity** - Data type, format, length, pattern, and case constraints:
+2. **Validation** - Data type, format, length, pattern, and case constraints:
    - Type checks: "must be numeric", "must be date", "must be valid email"
    - Length: VARCHAR2(30) → "[Field] should be maximum 30 characters"
    - Format/case: UPPERCASE / lowercase / alphanumeric / regex patterns
-   - DO NOT use "Character Length" or "Conformity" — those go under Validity.
+   - DO NOT use "Character Length" or "Conformity" — those go under Validation.
 
 3. **Uniqueness** - Unique constraints:
    - unique, distinct, no duplicates, primary key
@@ -595,7 +599,7 @@ variations, no legacy labels:
 4. **Accuracy** - Value-level correctness:
    - Value ranges, decimal precision, scale, lookups, business correctness
 
-5. **Consistency** - Cross-field / cross-record agreement:
+5. **Standardisation** - Cross-field / cross-record agreement:
    - Same value in related columns, referential consistency, sums tie out
 
 6. **Timeliness** - Date freshness / sequencing:
@@ -603,7 +607,7 @@ variations, no legacy labels:
 
 DO NOT emit any other dimension name (no Conformity, Character Length,
 Integrity, Reliability, Relevance, Precision, Accessibility, etc.).
-Length and case rules → Validity. Reference data correctness → Accuracy.
+Length and case rules → Validation. Reference data correctness → Accuracy.
 
 === HUMAN-READABLE RULE FORMATTING ===
 
@@ -621,22 +625,22 @@ Technical Input → Human-Readable Output:
 Write rules in this format: [Field Name] + must/should + condition
 
 Examples:
-- "Account Name should be maximum 30 characters" (Validity)
+- "Account Name should be maximum 30 characters" (Validation)
 - "Account Name must not be blank" (Completeness)
-- "Interface Line Number must be numeric" (Validity)
-- "Date Placed in Service must be in YYYY/MM/DD date format" (Validity)
-- "Asset Type should be maximum 11 characters" (Validity)
+- "Interface Line Number must be numeric" (Validation)
+- "Date Placed in Service must be in YYYY/MM/DD date format" (Validation)
+- "Asset Type should be maximum 11 characters" (Validation)
 
 === IMPORTANT GUIDELINES ===
 
-1. **For length / format / pattern rules** (Validity): use "should be maximum X characters" / "must be numeric" / "must be in [format]"
+1. **For length / format / pattern rules** (Validation): use "should be maximum X characters" / "must be numeric" / "must be in [format]"
 2. **For Completeness**: ALWAYS use "must not be blank" for mandatory fields
 3. **For Uniqueness**: Use "must be unique"
-4. The "dimension" field MUST be one of exactly: Accuracy, Completeness, Consistency, Validity, Uniqueness, Timeliness.
+4. The "dimension" field MUST be one of exactly: Accuracy, Completeness, Standardisation, Validation, Uniqueness, Timeliness.
 
 5. Generate SEPARATE rules for each dimension:
    - If field has VARCHAR2(30) AND is mandatory → Generate TWO rules:
-     * Rule 1: Dimension = "Validity",     Rule = "[Field] should be maximum 30 characters"
+     * Rule 1: Dimension = "Validation",     Rule = "[Field] should be maximum 30 characters"
      * Rule 2: Dimension = "Completeness", Rule = "[Field] must not be blank"
 
 6. PRIORITY: For every mandatory field, ALWAYS generate a Completeness rule
@@ -656,7 +660,7 @@ implements the check when applicable (e.g. "^.{{0,30}}$" for max 30 characters,
   "rules": [
     {{
       "business_field": "{column_name}",
-      "dimension": "Validity",
+      "dimension": "Validation",
       "data_quality_rule": "{column_name} should be maximum X characters",
       "regex_pattern": "^.{{0,X}}$",
       "issues_found": 0,
@@ -797,8 +801,8 @@ def generate_comprehensive_ai_prompt(column_name: str, sample_data: List[str], d
                                      sibling_samples: Optional[Dict[str, List[str]]] = None) -> str:
     """Build a deterministic per-column data-quality prompt.
 
-    Returns six rules — one per dimension Accuracy, Completeness, Consistency,
-    Timeliness, Validity, Uniqueness. Cross-field rules are produced by a
+    Returns six rules — one per dimension Accuracy, Completeness, Standardisation,
+    Timeliness, Validation, Uniqueness. Cross-field rules are produced by a
     separate dedicated pass (see ``generate_cross_field_prompt``) so the
     model can spend its attention budget on a single focused task.
 
@@ -838,7 +842,7 @@ def generate_comprehensive_ai_prompt(column_name: str, sample_data: List[str], d
         # when the user has generated a glossary on the AI Validations tab).
         # These steer the LLM toward type-aware rules — e.g. when
         # ``semantic_type`` is ``"email"`` it should emit the standard email
-        # regex for the Validity rule.
+        # regex for the Validation rule.
         if metadata.get('semantic_type'):
             metadata_lines.append(f"- Semantic Type: {metadata['semantic_type']}")
         if metadata.get('semantic_display_name'):
@@ -880,12 +884,12 @@ DIMENSION DEFINITIONS (use these definitions verbatim)
   values must be syntactically resolvable; an amount must be a non-negative
   number when the field is a price).
 - Completeness: the value is present (not null, not blank, not whitespace).
-- Consistency: the value follows a uniform representation across rows
+- Standardisation: the value follows a uniform representation across rows
   (e.g. consistent casing, consistent date format, consistent code system).
 - Timeliness: the value is current and within an expected time window.
   Only meaningful for date/time columns. For non-date columns, emit:
   "<Field>: timeliness is not applicable for non-date fields".
-- Validity: the value satisfies the column's structural rules — data type,
+- Validation: the value satisfies the column's structural rules — data type,
   length, allowed values, regex / format pattern.
 - Uniqueness: the value does not duplicate another row's value when the
   column is an identifier. For clearly non-identifier columns (categorical,
@@ -902,7 +906,7 @@ INSTRUCTIONS
 3. Use evidence-based limits. If metadata supplies a max_length, allowed
    values, or a regex, use that exactly — do not invent thresholds.
 4. The dimension field MUST be spelled EXACTLY as listed in the schema:
-   Accuracy, Completeness, Consistency, Timeliness, Validity, Uniqueness.
+   Accuracy, Completeness, Standardisation, Timeliness, Validation, Uniqueness.
 5. Do NOT propose any rule that mentions another column. Cross-field rules
    are produced by a separate pass.
 6. Return ONLY a JSON object — no prose, no markdown fence.
@@ -914,9 +918,9 @@ OUTPUT SCHEMA (return exactly these keys, in this order)
   "rules": [
     {{ "dimension": "Accuracy",     "data_quality_rule": "<one sentence>" }},
     {{ "dimension": "Completeness", "data_quality_rule": "<one sentence>" }},
-    {{ "dimension": "Consistency",  "data_quality_rule": "<one sentence>" }},
+    {{ "dimension": "Standardisation",  "data_quality_rule": "<one sentence>" }},
     {{ "dimension": "Timeliness",   "data_quality_rule": "<one sentence>" }},
-    {{ "dimension": "Validity",     "data_quality_rule": "<one sentence>" }},
+    {{ "dimension": "Validation",     "data_quality_rule": "<one sentence>" }},
     {{ "dimension": "Uniqueness",   "data_quality_rule": "<one sentence>" }}
   ]
 }}
@@ -928,9 +932,9 @@ WORKED EXAMPLE — VAT number column (mandatory)
   "rules": [
     {{ "dimension": "Accuracy",     "data_quality_rule": "VAT Number must correspond to an active VAT registration with the issuing tax authority" }},
     {{ "dimension": "Completeness", "data_quality_rule": "VAT Number must not be blank" }},
-    {{ "dimension": "Consistency",  "data_quality_rule": "VAT Number must be stored in uppercase with no spaces, hyphens, or punctuation" }},
+    {{ "dimension": "Standardisation",  "data_quality_rule": "VAT Number must be stored in uppercase with no spaces, hyphens, or punctuation" }},
     {{ "dimension": "Timeliness",   "data_quality_rule": "VAT Number: timeliness is not applicable for non-date fields" }},
-    {{ "dimension": "Validity",     "data_quality_rule": "VAT Number must be alphanumeric with length between 8 and 14 characters after normalization" }},
+    {{ "dimension": "Validation",     "data_quality_rule": "VAT Number must be alphanumeric with length between 8 and 14 characters after normalization" }},
     {{ "dimension": "Uniqueness",   "data_quality_rule": "VAT Number must be unique across all records once normalized" }}
   ]
 }}
@@ -1264,7 +1268,7 @@ def validate_rule(df: pd.DataFrame, column: str, dimension: str, rule_text: str)
             return count, f"{count} duplicate values, e.g. {examples}"
         return 0, "All values valid - No issues found"
 
-    # ── Validity: allowed-value lists ─────────────────────────────────────
+    # ── Validation: allowed-value lists ─────────────────────────────────────
     allowed = _extract_allowed_values(rule_text)
     if allowed:
         non_null = col.dropna().astype(str).str.strip()
@@ -1294,7 +1298,7 @@ def validate_rule(df: pd.DataFrame, column: str, dimension: str, rule_text: str)
                 return count, f"{count} values exceed {max_dec} decimal places, e.g. {examples}"
         return 0, "All values valid - No issues found"
 
-    # ── Validity: numeric check ───────────────────────────────────────────
+    # ── Validation: numeric check ───────────────────────────────────────────
     if "must be a numeric" in rule_lower or "must be numeric" in rule_lower:
         non_null = col.dropna()
         converted = pd.to_numeric(non_null, errors="coerce")
@@ -1305,7 +1309,7 @@ def validate_rule(df: pd.DataFrame, column: str, dimension: str, rule_text: str)
             return count, f"{count} non-numeric values, e.g. {examples}"
         return 0, "All values valid - No issues found"
 
-    # ── Validity: valid string check ──────────────────────────────────────
+    # ── Validation: valid string check ──────────────────────────────────────
     if "must be a valid string" in rule_lower:
         mask = col.isnull() | col.astype(str).str.strip().eq("")
         count = int(mask.sum())
@@ -1313,7 +1317,7 @@ def validate_rule(df: pd.DataFrame, column: str, dimension: str, rule_text: str)
             return count, f"{count} blank/null values found"
         return 0, "All values valid - No issues found"
 
-    # ── Length / Validity (max-character) ─────────────────────────────────
+    # ── Length / Validation (max-character) ─────────────────────────────────
     max_chars = _extract_max_chars(rule_text)
     if max_chars or dimension == "Character Length" or "character" in rule_lower and "maximum" in rule_lower:
         if max_chars:
@@ -1405,7 +1409,7 @@ def validate_rule(df: pd.DataFrame, column: str, dimension: str, rule_text: str)
             return count, f"{count} values outside range [{lo}, {hi}], e.g. {examples}"
         return 0, "All values valid - No issues found"
 
-    # ── Validity: valid string format ─────────────────────────────────────
+    # ── Validation: valid string format ─────────────────────────────────────
     if "valid string format" in rule_lower or "valid string" in rule_lower:
         mask = col.isnull() | col.astype(str).str.strip().eq("")
         count = int(mask.sum())
@@ -1436,7 +1440,7 @@ def validate_rule(df: pd.DataFrame, column: str, dimension: str, rule_text: str)
             return count, f"{count} blank/empty values"
         return 0, "All values valid - No issues found"
 
-    # ── Consistency: consistent reflection / naming convention ─────────────
+    # ── Standardisation: consistent reflection / naming convention ─────────────
     if "consistently reflect" in rule_lower or "consistent naming convention" in rule_lower or "should maintain consistent" in rule_lower:
         non_null = col.dropna().astype(str).str.strip()
         unique_vals = non_null.unique()

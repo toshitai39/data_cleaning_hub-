@@ -64,7 +64,7 @@ export default function GroupDetail({ dupType, groupId, onChanged }) {
 
       {group.key_columns?.length > 0 && (
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-          <b>Key Columns:</b> {group.key_columns.join(', ')}
+          <b>Key critical data elements:</b> {group.key_columns.join(', ')}
         </Typography>
       )}
 

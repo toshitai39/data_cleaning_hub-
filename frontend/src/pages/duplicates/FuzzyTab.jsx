@@ -38,10 +38,10 @@ export default function FuzzyTab({ objectColumns }) {
       <Grid container spacing={2} sx={{ mb: 2 }}>
         <Grid item xs={12} md={4}>
           <FormControl fullWidth size="small">
-            <InputLabel>Columns to scan</InputLabel>
+            <InputLabel>Critical data elements to scan</InputLabel>
             <Select multiple value={columns}
               onChange={(e) => setColumns(typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value)}
-              input={<OutlinedInput label="Columns to scan" />}
+              input={<OutlinedInput label="Critical data elements to scan" />}
               renderValue={(s) => s.join(', ')}>
               {objectColumns.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
             </Select>

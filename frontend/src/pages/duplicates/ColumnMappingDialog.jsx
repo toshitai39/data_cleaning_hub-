@@ -53,7 +53,7 @@ export default function ColumnMappingDialog({
         <Stack direction="row" alignItems="center" spacing={1.25}>
           <LinkOutlinedIcon sx={{ color: '#6A28A8' }} />
           <Typography sx={{ fontFamily: "'Montserrat', sans-serif", fontWeight: 700, fontSize: 18 }}>
-            Map rule columns to your dataset
+            Map rule critical data elements to your dataset
           </Typography>
         </Stack>
         <Typography sx={{ fontSize: 12.5, color: '#8A8A8A', mt: 0.5 }}>
@@ -62,10 +62,10 @@ export default function ColumnMappingDialog({
       </DialogTitle>
       <DialogContent dividers>
         <Alert severity="info" sx={{ mb: 2 }}>
-          The rule expects these columns; your dataset uses different names.
-          Pick the matching column on your side for each one.
+          The rule expects these critical data elements; your dataset uses different names.
+          Pick the matching critical data element on your side for each one.
           {' '}
-          <b>{missingColumns.length}</b> column{missingColumns.length === 1 ? '' : 's'} need mapping.
+          <b>{missingColumns.length}</b> critical data element{missingColumns.length === 1 ? '' : 's'} need mapping.
         </Alert>
 
         <Stack spacing={2}>
@@ -89,7 +89,7 @@ export default function ColumnMappingDialog({
               >
                 <Box>
                   <Typography sx={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#8A8A8A', textTransform: 'uppercase' }}>
-                    Rule column
+                    Rule critical data element
                   </Typography>
                   <Typography
                     sx={{
@@ -109,10 +109,10 @@ export default function ColumnMappingDialog({
                   value={mapping[ruleCol] || ''}
                   onChange={(e) => setOne(ruleCol, e.target.value)}
                   fullWidth
-                  label="Your column"
+                  label="Your critical data element"
                 >
                   <MenuItem value="">
-                    <em>— pick a column —</em>
+                    <em>— pick a critical data element —</em>
                   </MenuItem>
                   {availableColumns.map((c) => (
                     <MenuItem key={c} value={c} sx={{ fontFamily: 'ui-monospace, Menlo, monospace' }}>

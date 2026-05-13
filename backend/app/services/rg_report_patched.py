@@ -65,7 +65,7 @@ def generate_dq_rule_report_html(validation_df: pd.DataFrame, filename: str, tot
         <tr>
             <td>{row.get('S.No', '')}</td>
             <td>{row.get('Column', '')}</td>
-            <td><span class="badge dim-{str(row.get('Dimension', 'Validity')).lower()}">{row.get('Dimension', 'Validity')}</span></td>
+            <td><span class="badge dim-{str(row.get('Dimension', 'Validation')).lower()}">{row.get('Dimension', 'Validation')}</span></td>
             <td>{row.get('Data Quality Rule', '')}</td>
             <td style="font-family: monospace; font-size: 0.75rem;">{regex_html}</td>
             <td style="{issue_style}">{issues}</td>

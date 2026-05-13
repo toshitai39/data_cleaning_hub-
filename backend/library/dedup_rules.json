@@ -8,17 +8,27 @@
   },
   "rules": [
     {
-      "id": "vendor-exact-tax-id",
+      "id": "vendor-domestic-name-pan-gst",
       "stream": "vendor",
-      "label": "Vendor — exact tax ID",
-      "description": "Two vendors with the same non-null national tax identifier are the same legal entity.",
+      "label": "Vendor — Domestic (Name + PAN + GST exact)",
+      "description": "Two vendors with the same name, PAN, and GST number are the same Indian legal entity. All three must match exactly.",
       "kind": "duplicate",
       "match_strategy": "exact",
       "match_columns": [
         {
-          "column": "tax_id",
-          "method": "exact_non_null",
-          "aliases": ["pan_number", "pan", "vat_no", "vat_number", "gstin", "gst_number", "tin", "ein"]
+          "column": "name",
+          "method": "exact",
+          "aliases": ["vendor_name", "legal_name", "company_name", "supplier_name", "trade_name"]
+        },
+        {
+          "column": "pan_number",
+          "method": "exact",
+          "aliases": ["pan", "pan_no", "permanent_account_number"]
+        },
+        {
+          "column": "gst_number",
+          "method": "exact",
+          "aliases": ["gstin", "gst", "gst_no", "gst_in"]
         }
       ],
       "survivorship": {
@@ -28,16 +38,16 @@
       },
       "severity": "high",
       "action_class": "auto_merge",
-      "notes": "Tax IDs are issued one-per-entity by national authorities. Safe to auto-merge once verified.",
+      "notes": "Indian vendors with identical name + PAN + GST are guaranteed duplicates. Safe to auto-merge — PAN identifies the parent entity and GST identifies the state registration; together with name they're an unambiguous match.",
       "min_group_size": 2,
       "source": "library",
-      "version": 2
+      "version": 3
     },
     {
-      "id": "vendor-fuzzy-name-country",
+      "id": "vendor-international-name-address",
       "stream": "vendor",
-      "label": "Vendor — fuzzy name + exact country",
-      "description": "Normalized name fuzzy-match at ≥85% within the same country.",
+      "label": "Vendor — International (Name + Address)",
+      "description": "Two international vendors with similar names and similar addresses. Used when PAN / GST don't apply.",
       "kind": "duplicate",
       "match_strategy": "fuzzy",
       "match_columns": [
@@ -48,9 +58,10 @@
           "aliases": ["vendor_name", "legal_name", "company_name", "supplier_name", "trade_name"]
         },
         {
-          "column": "country",
-          "method": "exact",
-          "aliases": ["country_code", "ctry", "land1", "iso_country"]
+          "column": "address",
+          "method": "token_sort_ratio",
+          "threshold": 0.80,
+          "aliases": ["address_line", "full_address", "billing_address", "street", "registered_address", "street_address"]
         }
       ],
       "survivorship": {
@@ -60,200 +71,53 @@
       },
       "severity": "high",
       "action_class": "review_required",
-      "notes": "Catches \"Acme GmbH\" vs \"Acme G.m.b.H.\" within the same country. Human reviews the survivorship merge before applying.",
+      "notes": "International vendors lack Indian tax IDs, so duplicate detection falls back to name + address fuzzy matching. Address threshold is slightly lower (80%) because addresses vary in formatting (\"St.\" vs \"Street\", line breaks, postal-code position).",
       "min_group_size": 2,
       "source": "library",
-      "version": 2
-    },
-    {
-      "id": "vendor-composite-name-country-entity",
-      "stream": "vendor",
-      "label": "Vendor — name + country + entity type (composite)",
-      "description": "Three-key composite uniqueness for vendor master. Catches duplicates that share legal form, jurisdiction, and similar name.",
-      "kind": "duplicate",
-      "match_strategy": "fuzzy",
-      "match_columns": [
-        {
-          "column": "name",
-          "method": "token_sort_ratio",
-          "threshold": 0.88,
-          "aliases": ["vendor_name", "legal_name", "company_name", "supplier_name"]
-        },
-        {
-          "column": "country",
-          "method": "exact",
-          "aliases": ["country_code", "land1", "iso_country"]
-        },
-        {
-          "column": "entity_type",
-          "method": "exact",
-          "aliases": ["legal_form", "company_type", "type_of_entity", "organisation_type"]
-        }
-      ],
-      "survivorship": {
-        "strategy": "field_level_merge",
-        "priority": ["most_complete", "most_recent"]
-      },
-      "severity": "high",
-      "action_class": "review_required",
-      "notes": "Strongest pre-emptive duplicate check for new vendor onboarding. Tightens threshold to 88% because the extra two keys already filter false positives.",
-      "min_group_size": 2,
-      "source": "library",
-      "version": 2
-    },
-    {
-      "id": "vendor-exact-bank-account",
-      "stream": "vendor",
-      "label": "Vendor — shared bank account (fraud signal)",
-      "description": "Two vendors paid into the same bank account. Often a duplicate, sometimes a fraud red flag.",
-      "kind": "duplicate",
-      "match_strategy": "exact",
-      "match_columns": [
-        {
-          "column": "bank_account_number",
-          "method": "exact_non_null",
-          "aliases": ["bankn", "iban", "account_number", "acct_no", "bank_acc"]
-        },
-        {
-          "column": "bank_code",
-          "method": "exact_non_null",
-          "aliases": ["bankl", "swift", "bic", "routing_number", "ifsc"]
-        }
-      ],
-      "survivorship": {
-        "strategy": "most_recent",
-        "recency_column": "updated_at"
-      },
-      "severity": "high",
-      "action_class": "flag_only",
-      "notes": "Don't auto-merge — this is a fraud audit signal. Forward to procurement controls for investigation, then decide whether to merge or flag.",
-      "min_group_size": 2,
-      "source": "library",
-      "version": 2
-    },
-    {
-      "id": "vendor-fuzzy-name-city",
-      "stream": "vendor",
-      "label": "Vendor — fuzzy name + same city",
-      "description": "Fallback when country is missing — group vendors operating in the same city with similar names.",
-      "kind": "duplicate",
-      "match_strategy": "fuzzy",
-      "match_columns": [
-        {
-          "column": "name",
-          "method": "token_sort_ratio",
-          "threshold": 0.85,
-          "aliases": ["vendor_name", "legal_name", "company_name"]
-        },
-        {
-          "column": "city",
-          "method": "exact",
-          "aliases": ["ort01", "town", "locality"]
-        }
-      ],
-      "survivorship": {
-        "strategy": "field_level_merge",
-        "priority": ["most_complete"]
-      },
-      "severity": "medium",
-      "action_class": "review_required",
-      "notes": "Use when country isn't reliable (single-country dataset). Higher false-positive rate than country-based — review carefully.",
-      "min_group_size": 2,
-      "source": "library",
-      "version": 2
+      "version": 3
     },
 
     {
-      "id": "customer-exact-gstin",
+      "id": "customer-domestic-name-pan-gst",
       "stream": "customer",
-      "label": "Customer — exact GSTIN (India)",
-      "description": "Two customers sharing the same Indian GSTIN are the same legal entity in that state.",
+      "label": "Customer — Domestic (Name + PAN + GST exact)",
+      "description": "Two customers with the same name, PAN, and GST number are the same Indian legal entity. All three must match exactly.",
       "kind": "duplicate",
       "match_strategy": "exact",
       "match_columns": [
         {
+          "column": "name",
+          "method": "exact",
+          "aliases": ["customer_name", "legal_name", "company_name", "client_name"]
+        },
+        {
+          "column": "pan_number",
+          "method": "exact",
+          "aliases": ["pan", "pan_no", "permanent_account_number"]
+        },
+        {
           "column": "gst_number",
-          "method": "exact_non_null",
+          "method": "exact",
           "aliases": ["gstin", "gst", "gst_no", "gst_in"]
         }
       ],
       "survivorship": {
         "strategy": "field_level_merge",
-        "priority": ["most_complete", "most_recent"]
+        "priority": ["most_complete", "most_recent"],
+        "recency_column": "updated_at"
       },
       "severity": "high",
       "action_class": "auto_merge",
-      "notes": "GSTIN is unique per entity per state. Same GSTIN ⇒ same legal entity. Safe to auto-merge.",
+      "notes": "Indian customers with identical name + PAN + GST are guaranteed duplicates. Safe to auto-merge — PAN identifies the parent entity, GST identifies the state registration; together with name they're an unambiguous match.",
       "min_group_size": 2,
       "source": "library",
-      "version": 2
+      "version": 3
     },
     {
-      "id": "customer-exact-pan",
+      "id": "customer-international-name-address",
       "stream": "customer",
-      "label": "Customer — exact PAN (India)",
-      "description": "Two customers sharing the same PAN number are the same parent entity (possibly different states).",
-      "kind": "duplicate",
-      "match_strategy": "exact",
-      "match_columns": [
-        {
-          "column": "pan_number",
-          "method": "exact_non_null",
-          "aliases": ["pan", "pan_no", "permanent_account_number"]
-        }
-      ],
-      "survivorship": {
-        "strategy": "field_level_merge",
-        "priority": ["most_complete"]
-      },
-      "severity": "high",
-      "action_class": "review_required",
-      "notes": "Same PAN can legitimately appear under multiple GSTINs (one per state for one company). Review before merging — you may want to keep state-level rows.",
-      "min_group_size": 2,
-      "source": "library",
-      "version": 2
-    },
-    {
-      "id": "customer-composite-name-country-entity",
-      "stream": "customer",
-      "label": "Customer — name + country + entity type (composite)",
-      "description": "Three-key composite uniqueness for customer master.",
-      "kind": "duplicate",
-      "match_strategy": "fuzzy",
-      "match_columns": [
-        {
-          "column": "name",
-          "method": "token_sort_ratio",
-          "threshold": 0.88,
-          "aliases": ["customer_name", "legal_name", "company_name", "client_name"]
-        },
-        {
-          "column": "country",
-          "method": "exact",
-          "aliases": ["country_code", "land1", "iso_country"]
-        },
-        {
-          "column": "entity_type",
-          "method": "exact",
-          "aliases": ["legal_form", "company_type", "organisation_type"]
-        }
-      ],
-      "survivorship": {
-        "strategy": "field_level_merge",
-        "priority": ["most_complete", "most_recent"]
-      },
-      "severity": "high",
-      "action_class": "review_required",
-      "notes": "Strongest pre-emptive duplicate check for customer onboarding. Use when tax IDs are missing or unreliable.",
-      "min_group_size": 2,
-      "source": "library",
-      "version": 2
-    },
-    {
-      "id": "customer-fuzzy-name-state",
-      "stream": "customer",
-      "label": "Customer — fuzzy name + same state",
-      "description": "Customers with similar names operating in the same state. Useful when GSTIN is missing.",
+      "label": "Customer — International (Name + Address)",
+      "description": "Two international customers with similar names and similar addresses. Used when PAN / GST don't apply.",
       "kind": "duplicate",
       "match_strategy": "fuzzy",
       "match_columns": [
@@ -261,49 +125,26 @@
           "column": "name",
           "method": "token_sort_ratio",
           "threshold": 0.85,
-          "aliases": ["customer_name", "legal_name", "company_name"]
+          "aliases": ["customer_name", "legal_name", "company_name", "client_name"]
         },
         {
-          "column": "state",
-          "method": "exact",
-          "aliases": ["region", "province", "state_code"]
+          "column": "address",
+          "method": "token_sort_ratio",
+          "threshold": 0.80,
+          "aliases": ["address_line", "full_address", "billing_address", "street", "registered_address", "street_address"]
         }
       ],
       "survivorship": {
         "strategy": "field_level_merge",
-        "priority": ["most_complete", "most_recent"]
-      },
-      "severity": "medium",
-      "action_class": "review_required",
-      "notes": "Falls back to geography when tax IDs are absent. Higher false-positive rate than tax-id rules.",
-      "min_group_size": 2,
-      "source": "library",
-      "version": 2
-    },
-    {
-      "id": "customer-exact-email",
-      "stream": "customer",
-      "label": "Customer — same primary email",
-      "description": "Two customer records sharing the same normalized email address.",
-      "kind": "duplicate",
-      "match_strategy": "exact",
-      "match_columns": [
-        {
-          "column": "email",
-          "method": "exact_non_null",
-          "aliases": ["email_address", "primary_email", "contact_email", "smtp_addr"]
-        }
-      ],
-      "survivorship": {
-        "strategy": "most_recent",
+        "priority": ["most_complete", "most_recent"],
         "recency_column": "updated_at"
       },
-      "severity": "medium",
+      "severity": "high",
       "action_class": "review_required",
-      "notes": "B2C usage — strong duplicate signal. B2B — a generic info@ email can be shared across real legal entities; review before merging.",
+      "notes": "International customers lack Indian tax IDs, so duplicate detection falls back to name + address fuzzy matching. Address threshold is slightly lower (80%) because addresses vary in formatting (\"St.\" vs \"Street\", line breaks, postal-code position).",
       "min_group_size": 2,
       "source": "library",
-      "version": 2
+      "version": 3
     },
 
     {

@@ -21,7 +21,7 @@ export default function FindDuplicates() {
     setLoading(true);
     api.get('/duplicates/columns')
       .then((r) => setColumns(r.data))
-      .catch((e) => setErr(e?.response?.data?.detail || 'Failed to load columns'))
+      .catch((e) => setErr(e?.response?.data?.detail || 'Failed to load critical data elements'))
       .finally(() => setLoading(false));
   }, [state.loaded, state.operations]);
 

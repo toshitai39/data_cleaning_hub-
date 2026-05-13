@@ -73,3 +73,19 @@ html, body, #root {
   border-radius: 6px;
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--fg-3); }
+
+/* Chrome autofill — its default light-blue/yellow background and forced
+   text colour clash with the rest of the form. Replace with the same
+   neutral bg + foreground as our normal inputs so autofilled fields look
+   identical to user-typed ones. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-box-shadow: 0 0 0 100px #FFFFFF inset !important;
+  -webkit-text-fill-color: #1A1A1A !important;
+  caret-color: #1A1A1A !important;
+  transition: background-color 5000s ease-in-out 0s;
+}

@@ -1,4 +1,5 @@
 import { Box, Typography, Avatar, IconButton, Tooltip } from '@mui/material';
+import { useProject } from '../context/ProjectContext.jsx';
 import LogoutIcon from '@mui/icons-material/Logout';
 import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined';
 import UploadFileOutlinedIcon from '@mui/icons-material/UploadFileOutlined';
@@ -52,13 +53,17 @@ export const STAGES = [
 
 export const STAGE_KEYS = STAGES.flatMap((s) => s.steps.map((st) => st.key));
 
-function StepRow({ icon: Icon, label, active, onClick }) {
-  return (
+function StepRow({ icon: Icon, label, active, onClick, disabled, disabledReason }) {
+  const inner = (
     <Box
       role="button"
-      tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); }}
+      tabIndex={disabled ? -1 : 0}
+      aria-disabled={disabled || undefined}
+      onClick={disabled ? undefined : onClick}
+      onKeyDown={(e) => {
+        if (disabled) return;
+        if (e.key === 'Enter' || e.key === ' ') onClick();
+      }}
       sx={{
         position: 'relative',
         display: 'flex',
@@ -68,16 +73,19 @@ function StepRow({ icon: Icon, label, active, onClick }) {
         py: 1.1,
         mb: 0.4,
         borderRadius: 1.25,
-        cursor: 'pointer',
-        color: active ? '#FFFFFF' : 'rgba(255,255,255,0.78)',
-        bgcolor: active ? 'rgba(255,255,255,0.10)' : 'transparent',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        color: disabled
+          ? 'rgba(255,255,255,0.32)'
+          : active ? '#FFFFFF' : 'rgba(255,255,255,0.78)',
+        bgcolor: !disabled && active ? 'rgba(255,255,255,0.10)' : 'transparent',
         fontWeight: active ? 600 : 500,
+        opacity: disabled ? 0.85 : 1,
         transition: 'background-color 120ms, color 120ms',
-        '&:hover': {
+        '&:hover': disabled ? {} : {
           bgcolor: active ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.06)',
           color: '#FFFFFF',
         },
-        '&::before': active ? {
+        '&::before': !disabled && active ? {
           content: '""',
           position: 'absolute',
           left: 6,
@@ -90,17 +98,38 @@ function StepRow({ icon: Icon, label, active, onClick }) {
         } : {},
       }}
     >
-      <Icon sx={{ fontSize: 18, color: active ? '#FFFFFF' : 'rgba(255,255,255,0.68)' }} />
+      <Icon
+        sx={{
+          fontSize: 18,
+          color: disabled
+            ? 'rgba(255,255,255,0.28)'
+            : active ? '#FFFFFF' : 'rgba(255,255,255,0.68)',
+        }}
+      />
       <Typography variant="body2" sx={{ fontWeight: 'inherit', fontSize: '0.84rem' }}>
         {label}
       </Typography>
     </Box>
   );
+  if (disabled && disabledReason) {
+    return (
+      <Tooltip title={disabledReason} placement="right" arrow>
+        <span>{inner}</span>
+      </Tooltip>
+    );
+  }
+  return inner;
 }
 
 export default function Sidebar({ activeKey, onSelect }) {
   const { user, logout } = useAuth();
+  const { active: activeProject } = useProject();
   const initials = (user?.name || user?.username || 'U').slice(0, 2).toUpperCase();
+  const hasProject = !!activeProject;
+  // Keys that always work regardless of project state. Everything else
+  // requires an active project — the user picks one from Home (or creates
+  // a new analysis) before the data-dependent steps come alive.
+  const ALWAYS_ENABLED = new Set(['home', 'new']);
 
   return (
     <Box
@@ -166,15 +195,24 @@ export default function Sidebar({ activeKey, onSelect }) {
             >
               {stage.section}
             </Typography>
-            {stage.steps.map((step) => (
-              <StepRow
-                key={step.key}
-                icon={step.icon}
-                label={step.label}
-                active={step.key === activeKey}
-                onClick={() => onSelect(step.key)}
-              />
-            ))}
+            {stage.steps.map((step) => {
+              const stepDisabled = !ALWAYS_ENABLED.has(step.key) && !hasProject;
+              return (
+                <StepRow
+                  key={step.key}
+                  icon={step.icon}
+                  label={step.label}
+                  active={step.key === activeKey}
+                  onClick={() => onSelect(step.key)}
+                  disabled={stepDisabled}
+                  disabledReason={
+                    stepDisabled
+                      ? 'Open or create a project on the Home page to enable this step.'
+                      : undefined
+                  }
+                />
+              );
+            })}
           </Box>
         ))}
       </Box>

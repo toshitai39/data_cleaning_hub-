@@ -120,7 +120,7 @@ export default function GoldenRecordDialog({
                 <TableHead>
                   <TableRow>
                     <TableCell sx={{ fontWeight: 700, position: 'sticky', left: 0, bgcolor: '#FBFAFC', zIndex: 2 }}>
-                      Column
+                      Critical data element
                     </TableCell>
                     {data.members.map((m) => (
                       <TableCell
@@ -273,7 +273,7 @@ export default function GoldenRecordDialog({
 
             {Object.keys(overrides).length > 0 && (
               <Alert severity="warning" icon={<EditOutlinedIcon />} sx={{ mt: 2 }}>
-                <b>{Object.keys(overrides).length}</b> column{Object.keys(overrides).length === 1 ? '' : 's'} manually overridden.
+                <b>{Object.keys(overrides).length}</b> critical data element{Object.keys(overrides).length === 1 ? '' : 's'} manually overridden.
                 Apply will use your edits in place of the computed values.
               </Alert>
             )}

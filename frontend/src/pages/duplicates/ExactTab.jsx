@@ -45,10 +45,10 @@ export default function ExactTab({ allColumns }) {
       <Grid container spacing={2} alignItems="center" sx={{ mb: 2 }}>
         <Grid item xs={12} md={6}>
           <FormControl fullWidth size="small">
-            <InputLabel>Check specific columns (empty = all)</InputLabel>
+            <InputLabel>Check specific critical data elements (empty = all)</InputLabel>
             <Select multiple value={subset}
               onChange={(e) => setSubset(typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value)}
-              input={<OutlinedInput label="Check specific columns (empty = all)" />}
+              input={<OutlinedInput label="Check specific critical data elements (empty = all)" />}
               renderValue={(s) => s.join(', ')}>
               {allColumns.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
             </Select>

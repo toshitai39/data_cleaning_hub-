@@ -118,7 +118,7 @@ def _parse_constraint_to_rules(constraint: str, column_name: str, is_mandatory: 
 
     if "yyyy" in constraint_lower or "mm" in constraint_lower or "dd" in constraint_lower:
         rules.append({
-            "dimension": "Validity",
+            "dimension": "Validation",
             "rule_statement": f"{column_name} must be in {constraint} date format",
         })
         rules.append({
@@ -133,13 +133,13 @@ def _parse_constraint_to_rules(constraint: str, column_name: str, is_mandatory: 
         return rules
 
     if constraint_lower == "number":
-        rules.append({"dimension": "Validity", "rule_statement": f"{column_name} must be numeric"})
+        rules.append({"dimension": "Validation", "rule_statement": f"{column_name} must be numeric"})
         if is_mandatory:
             rules.append({"dimension": "Completeness", "rule_statement": f"{column_name} must not be blank"})
         return rules
 
     if "number without thousand separator" in constraint_lower:
-        rules.append({"dimension": "Validity", "rule_statement": f"{column_name} must be numeric"})
+        rules.append({"dimension": "Validation", "rule_statement": f"{column_name} must be numeric"})
         rules.append({
             "dimension": "Conformity",
             "rule_statement": f"{column_name} must not contain thousand separators (commas)",
@@ -149,7 +149,7 @@ def _parse_constraint_to_rules(constraint: str, column_name: str, is_mandatory: 
         return rules
 
     if "text" in constraint_lower or "string" in constraint_lower:
-        rules.append({"dimension": "Validity", "rule_statement": f"{column_name} must contain valid text"})
+        rules.append({"dimension": "Validation", "rule_statement": f"{column_name} must contain valid text"})
         if is_mandatory:
             rules.append({"dimension": "Completeness", "rule_statement": f"{column_name} must not be blank"})
         return rules

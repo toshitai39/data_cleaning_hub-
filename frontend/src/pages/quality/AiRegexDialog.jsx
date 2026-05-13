@@ -29,7 +29,7 @@ export default function AiRegexDialog({ open, onClose, columns }) {
       <DialogTitle>AI Regex Generator</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 0.5 }}>
-          <TextField select label="Column" value={col} onChange={(e) => setCol(e.target.value)} fullWidth>
+          <TextField select label="Critical data element" value={col} onChange={(e) => setCol(e.target.value)} fullWidth>
             {(columns || []).map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
           </TextField>
           <TextField

@@ -141,7 +141,7 @@ export default function DataQuality() {
   if (!state.loaded) {
     return (
       <>
-        <PageHeader title="Cleansing" subtitle="Per-column rule editor — apply, review and reject violations." />
+        <PageHeader title="Cleansing" subtitle="Per critical-data-element rule editor — apply, review and reject violations." />
         <EmptyState />
       </>
     );
@@ -151,7 +151,7 @@ export default function DataQuality() {
     <>
       <PageHeader
         title="Cleansing"
-        subtitle="Apply rules column-by-column · review and reject violations."
+        subtitle="Apply rules per critical data element · review and reject violations."
       />
       {busy && <LinearProgress sx={{ mb: 2 }} />}
       {err && <Alert severity="error" sx={{ mb: 2 }}>{err}</Alert>}
@@ -163,7 +163,7 @@ export default function DataQuality() {
           <StatCard accent label="Rows" value={stats.rows.toLocaleString()} />
         </Grid>
         <Grid item xs={4} md={2}>
-          <StatCard label="Columns" value={stats.columns} />
+          <StatCard label="Critical data elements" value={stats.columns} />
         </Grid>
         <Grid item xs={4} md={2}>
           <StatCard
@@ -263,7 +263,7 @@ export default function DataQuality() {
         <Grid container alignItems="center" spacing={1}
               sx={{ pb: 1, borderBottom: '1px solid', borderColor: 'divider' }}>
           <HeaderCell sm={1}>On</HeaderCell>
-          <HeaderCell sm={2}>Column</HeaderCell>
+          <HeaderCell sm={2}>Critical data element</HeaderCell>
           <HeaderCell sm={2}>Values</HeaderCell>
           <HeaderCell sm={2}>Rules</HeaderCell>
           <HeaderCell sm={1}>Mode</HeaderCell>
@@ -335,7 +335,7 @@ export default function DataQuality() {
       <LibrarySaveDialog open={saveOpen} onClose={() => setSaveOpen(false)}
         onDone={(name) => setMsg(`Saved rule set '${name}'`)} />
       <LibraryLoadDialog open={loadOpen} onClose={() => setLoadOpen(false)}
-        onDone={(name, n) => { setMsg(`Loaded '${name}' (${n} columns)`); loadAll(); }} />
+        onDone={(name, n) => { setMsg(`Loaded '${name}' (${n} critical data elements)`); loadAll(); }} />
       <LibraryDeleteDialog open={delOpen} onClose={() => setDelOpen(false)}
         onDone={(name) => setMsg(`Deleted '${name}'`)} />
     </>

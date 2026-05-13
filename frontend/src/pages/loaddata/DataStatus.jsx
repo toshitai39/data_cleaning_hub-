@@ -81,7 +81,7 @@ export default function DataStatus({ filename, onClearAll, onLoadDifferent }) {
         </Grid>
         <Grid item xs={6} md={3}>
           <StatCard
-            label={scopeIsNarrowed ? 'Columns in scope' : 'Columns'}
+            label="Critical data elements"
             value={scopeIsNarrowed ? `${scopedCols} / ${totalCols}` : totalCols}
             delta={scopeIsNarrowed ? `${totalCols - scopedCols} excluded` : undefined}
           />
@@ -266,7 +266,7 @@ export default function DataStatus({ filename, onClearAll, onLoadDifferent }) {
                   color: '#1A1A1A',
                 }}
               >
-                Column summary
+                Critical data element summary
               </Typography>
             </Box>
           </AccordionSummary>
@@ -275,7 +275,7 @@ export default function DataStatus({ filename, onClearAll, onLoadDifferent }) {
               <Table size="small" stickyHeader>
                 <TableHead>
                   <TableRow>
-                    <TableCell sx={{ fontWeight: 700 }}>Column</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>Critical data element</TableCell>
                     <TableCell sx={{ fontWeight: 700 }}>Type</TableCell>
                     <TableCell sx={{ fontWeight: 700 }}>Non-null</TableCell>
                     <TableCell sx={{ fontWeight: 700 }}>Null %</TableCell>

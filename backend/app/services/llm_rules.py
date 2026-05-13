@@ -22,63 +22,87 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_DIMENSIONS = ("Accuracy", "Completeness", "Consistency", "Validity", "Uniqueness", "Timeliness")
+ALLOWED_DIMENSIONS = ("Accuracy", "Completeness", "Standardisation", "Validation", "Uniqueness", "Timeliness")
 
 
 def _normalize_dimension(value: Any) -> str:
     """Coerce any LLM-returned dimension into one of the six allowed dimensions."""
     raw = str(value or "").strip()
     if not raw:
-        return "Validity"
+        return "Validation"
     for d in ALLOWED_DIMENSIONS:
         if raw.lower() == d.lower():
             return d
     legacy = {
-        "conformity": "Validity",
-        "character length": "Validity",
-        "integrity": "Consistency",
+        "conformity": "Validation",
+        "character length": "Validation",
+        "integrity": "Standardisation",
         "reliability": "Accuracy",
         "relevance": "Accuracy",
         "precision": "Accuracy",
-        "accessibility": "Validity",
+        "accessibility": "Validation",
+        # Pre-rename display names — keep on-disk rules readable.
+        "validity": "Validation",
+        "consistency": "Standardisation",
     }
-    return legacy.get(raw.lower(), "Validity")
+    return legacy.get(raw.lower(), "Validation")
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _SECRETS_PATH = _PROJECT_ROOT / ".streamlit" / "secrets.toml"
+_DOTENV_PATH = _PROJECT_ROOT / ".env"
 
 
-def _read_secrets_file() -> Dict[str, str]:
-    """Parse .streamlit/secrets.toml as plain key=value lines.
+def _parse_kv_file(path: Path) -> Dict[str, str]:
+    """Read a flat ``KEY=value`` config file (.env or secrets.toml style).
 
-    Avoids adding a tomllib import dance — the Streamlit secrets file in this
-    project is flat key/value with double-quoted strings, so a tiny regex parse
-    is enough. Returns {} if the file is missing.
+    Accepts optional surrounding double or single quotes on the value, ignores
+    blank lines and ``#`` comments, and stops at the first ``#`` outside of a
+    quoted value so inline comments don't get swallowed. Returns ``{}`` when
+    the file is missing or unreadable — callers must tolerate empty configs.
     """
-    if not _SECRETS_PATH.exists():
+    if not path.exists():
         return {}
     out: Dict[str, str] = {}
     try:
-        text = _SECRETS_PATH.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8")
     except Exception:
         return {}
-    for line in text.splitlines():
-        line = line.strip()
+    for raw in text.splitlines():
+        line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        m = re.match(r'([A-Za-z0-9_]+)\s*=\s*"([^"]*)"', line)
-        if m:
-            out[m.group(1)] = m.group(2)
+        # Allow `KEY=value`, `KEY="value"`, `KEY='value'`, `export KEY=value`.
+        m = re.match(
+            r'(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^#\n]*))',
+            line,
+        )
+        if not m:
+            continue
+        key = m.group(1)
+        value = next((g for g in m.groups()[1:] if g is not None), "")
+        out[key] = value.strip()
     return out
+
+
+def _read_secrets_file() -> Dict[str, str]:
+    return _parse_kv_file(_SECRETS_PATH)
+
+
+def _read_dotenv_file() -> Dict[str, str]:
+    return _parse_kv_file(_DOTENV_PATH)
 
 
 @lru_cache(maxsize=1)
 def _config() -> Dict[str, Optional[str]]:
-    """Resolve Azure OpenAI config from env first, then secrets.toml."""
+    """Resolve Azure OpenAI config — env first, then ``.env`` at project root,
+    then ``.streamlit/secrets.toml``. The ``.env`` fallback is what makes the
+    Render / local-dev workflow Just Work without sourcing the file by hand.
+    """
+    dotenv = _read_dotenv_file()
     secrets = _read_secrets_file()
 
     def pick(key: str) -> Optional[str]:
-        return os.environ.get(key) or secrets.get(key) or None
+        return os.environ.get(key) or dotenv.get(key) or secrets.get(key) or None
 
     return {
         "endpoint": pick("AZURE_OPENAI_ENDPOINT"),
@@ -179,7 +203,7 @@ Return ONLY valid JSON, no markdown, with this exact structure:
   "business_field_name": "Human-friendly field name",
   "rules": [
     {{
-      "dimension": "MUST be exactly one of these six values (case-sensitive): Accuracy, Completeness, Consistency, Validity, Uniqueness, Timeliness. Do NOT use any other dimension name.",
+      "dimension": "MUST be exactly one of these six values (case-sensitive): Accuracy, Completeness, Standardisation, Validation, Uniqueness, Timeliness. Do NOT use any other dimension name.",
       "rule_statement": "Human readable rule in format: [Field Name] + Must/Should + Business Condition",
       "regex": "Optional regex pattern that values must match, or null"
     }}
@@ -191,9 +215,9 @@ REQUIREMENTS
 1. Generate 2-4 rules per column.
 2. ALWAYS include a Completeness rule if null_percentage > 0.
 3. ALWAYS include a Uniqueness rule if the column looks like an ID/UID/key.
-4. If sample values look like emails, phones, dates, IDs — include a Validity rule with a regex.
+4. If sample values look like emails, phones, dates, IDs — include a Validation rule with a regex.
 5. Use exact format: [Field Name] + Must/Should + Business Condition.
-6. The "dimension" field MUST be one of exactly these six values: Accuracy, Completeness, Consistency, Validity, Uniqueness, Timeliness. Format/length/case rules belong under Validity. Reject any output that uses a different dimension name.
+6. The "dimension" field MUST be one of exactly these six values: Accuracy, Completeness, Standardisation, Validation, Uniqueness, Timeliness. Format/length/case rules belong under Validation. Reject any output that uses a different dimension name.
 7. No markdown. No commentary. JSON only.
 """
 
@@ -246,14 +270,14 @@ def _heuristic_rules(name: str, series: pd.Series) -> List[Dict[str, Any]]:
         sample = s.iloc[0]
         if "@" in sample:
             rules.append({
-                "column": name, "dimension": "Validity",
+                "column": name, "dimension": "Validation",
                 "rule": f"{name} must follow standard email format",
                 "regex": r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
                 "examples": s.head(3).tolist(),
             })
         elif re.match(r"^-?\d+(\.\d+)?$", sample):
             rules.append({
-                "column": name, "dimension": "Validity",
+                "column": name, "dimension": "Validation",
                 "rule": f"{name} must be numeric",
                 "regex": r"^-?\d+(\.\d+)?$",
                 "examples": s.head(3).tolist(),
@@ -261,7 +285,7 @@ def _heuristic_rules(name: str, series: pd.Series) -> List[Dict[str, Any]]:
         else:
             max_len = int(s.str.len().max())
             rules.append({
-                "column": name, "dimension": "Validity",
+                "column": name, "dimension": "Validation",
                 "rule": f"{name} must not exceed {max_len} characters",
                 "regex": None,
                 "examples": s.head(3).tolist(),
@@ -269,7 +293,7 @@ def _heuristic_rules(name: str, series: pd.Series) -> List[Dict[str, Any]]:
 
     if not rules:
         rules.append({
-            "column": name, "dimension": "Validity",
+            "column": name, "dimension": "Validation",
             "rule": f"{name} should follow expected business format",
             "regex": None, "examples": [],
         })

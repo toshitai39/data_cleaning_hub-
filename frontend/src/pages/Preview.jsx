@@ -125,7 +125,7 @@ export default function Preview() {
           <Metric label="Total Rows" value={data ? data.total_rows.toLocaleString() : '—'} />
         </Grid>
         <Grid item xs={6} md={3}>
-          <Metric label="Total Columns" value={data?.total_columns ?? '—'} />
+          <Metric label="Total Critical Data Elements" value={data?.total_columns ?? '—'} />
         </Grid>
         <Grid item xs={6} md={3}>
           <Metric label="Memory" value={data ? `${data.memory_mb} MB` : '—'} />
@@ -174,11 +174,11 @@ export default function Preview() {
       <Grid container spacing={1.5} sx={{ mb: 2 }}>
         <Grid item xs={12} md={9}>
           <FormControl fullWidth size="small">
-            <InputLabel>Select columns to display</InputLabel>
+            <InputLabel>Select critical data elements to display</InputLabel>
             <Select multiple value={selectedCols}
               onChange={(e) => setSelectedCols(typeof e.target.value === 'string'
                 ? e.target.value.split(',') : e.target.value)}
-              input={<OutlinedInput label="Select columns to display" />}
+              input={<OutlinedInput label="Select critical data elements to display" />}
               renderValue={(s) => s.join(', ')}>
               {allColumns.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
             </Select>
