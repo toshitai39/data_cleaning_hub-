@@ -19,6 +19,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from .db import init_db  # noqa: E402
 from .routers import (  # noqa: E402  (import after sys.path tweak)
+    admin_router,
     audit_router,
     auth_router,
     data_router,
@@ -61,6 +62,7 @@ app.include_router(quality_router.router)
 app.include_router(rule_generator_router.router)
 app.include_router(export_router.router)
 app.include_router(audit_router.router)
+app.include_router(admin_router.router)
 
 
 @app.on_event("startup")

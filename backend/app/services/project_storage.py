@@ -127,10 +127,24 @@ def load_rules(project_id: str) -> Optional[pd.DataFrame]:
     if not p.exists():
         return None
     try:
-        return pd.read_parquet(p)
+        df = pd.read_parquet(p)
     except Exception as exc:
         logger.error("load_rules(%s) failed: %s", project_id, exc)
         return None
+    # Normalise legacy dimension labels at the boundary so every consumer
+    # (Rule Generator page, Dashboard rules-by-dim, Accuracy report) sees
+    # canonical names. Rules persisted before the 2026-05 rename had
+    # Consistency / Validity, which broke per-dimension grouping.
+    if df is not None and not df.empty and "Dimension" in df.columns:
+        legacy_to_canonical = {
+            "Consistency": "Standardisation",
+            "Validity":    "Validation",
+            "validity":    "Validation",
+            "consistency": "Standardisation",
+        }
+        df = df.copy()
+        df["Dimension"] = df["Dimension"].astype(str).replace(legacy_to_canonical)
+    return df
 
 
 def save_glossary(project_id: str, glossary: Optional[Dict[str, Dict[str, Any]]]) -> None:

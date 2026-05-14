@@ -8,9 +8,60 @@ Excel export of groups (full or selected subset).
 from __future__ import annotations
 
 import io
+import logging
+import math
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+
+def _json_safe(value: Any) -> Any:
+    """Coerce numpy / pandas scalars to plain Python types that FastAPI's
+    default JSON encoder can serialise. Without this the dialog's GET
+    request 500s with no detail when a column contains a Timestamp /
+    numpy int / numpy bool — exactly the case for customer-master data.
+    """
+    if value is None:
+        return None
+    # NaN / NaT first — bare pd.isna on arrays is ambiguous so guard with try.
+    try:
+        if isinstance(value, float) and math.isnan(value):
+            return None
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, (str, int, bool)):
+        return value
+    if isinstance(value, float):
+        return value
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        f = float(value)
+        return None if math.isnan(f) else f
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, (pd.Timestamp, datetime, date)):
+        try:
+            return value.isoformat()
+        except Exception:
+            return str(value)
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    # Fallback — stringify anything else so the response never blocks.
+    try:
+        return str(value)
+    except Exception:
+        return None
+
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -25,6 +76,7 @@ from ..services.duplicates_engine import (
     remove_exact,
     remove_fuzzy_group,
     scan_combined,
+    scan_custom,
     scan_exact,
     scan_fuzzy,
 )
@@ -53,6 +105,22 @@ class ScanCombinedBody(BaseModel):
     fuzzy_columns: List[str]
     threshold: float = 85.0
     algorithm: str = "rapidfuzz"
+
+
+class ScanCustomBody(BaseModel):
+    """User-authored dedup rule: multi-CDE selection + AND / OR + survivorship.
+
+    AND  → records are duplicates iff they match on EVERY selected CDE.
+    OR   → records are duplicates iff they match on AT LEAST ONE selected CDE.
+    Survivorship is passed straight through to the golden-record engine
+    (most_complete / most_recent / field_level_merge).
+    """
+    columns: List[str]
+    operator: str = "AND"  # AND | OR
+    # Survivorship config shaped exactly like the legacy library rule's
+    # ``survivorship`` field. Optional — backend falls back to
+    # ``most_complete`` when omitted.
+    survivorship: Optional[Dict[str, Any]] = None
 
 
 class RemoveExactBody(BaseModel):
@@ -148,12 +216,64 @@ def combined_scan(body: ScanCombinedBody, sess: SessionData = Depends(require_da
     }
 
 
+# ---------- custom (user-authored: multi-CDE + AND/OR + survivorship) ---
+
+@router.post("/custom/scan")
+def custom_scan(
+    body: ScanCustomBody,
+    sess: SessionData = Depends(require_dataframe),
+) -> dict:
+    """Run a user-authored deduplication rule and return groups.
+
+    The rule's survivorship config is echoed back in the response so the
+    Golden Record review dialog can apply it without a second round-trip.
+    Survivorship is also stashed on the session so the apply-golden
+    endpoint can pick it up when ``dup_type == "custom"``.
+    """
+    if not body.columns:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one critical data element is required.",
+        )
+    dataset_cols = {str(c) for c in sess.df.columns}
+    unknown = [c for c in body.columns if c not in dataset_cols]
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown critical data element(s): {', '.join(unknown)}",
+        )
+
+    try:
+        groups = scan_custom(sess, body.columns, body.operator)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Custom scan failed: {exc}")
+
+    survivorship = body.survivorship or {"strategy": "most_complete"}
+    # Persist on session so /apply-golden can find it without a re-send.
+    meta = sess.duplicates_meta.get("custom") or {}
+    meta["survivorship"] = survivorship
+    sess.duplicates_meta["custom"] = meta
+
+    return {
+        "type": "custom",
+        "operator": body.operator.upper(),
+        "columns": body.columns,
+        "survivorship": survivorship,
+        "total_groups": len(groups),
+        "total_rows": sum(len(g.indices) for g in groups),
+        "summaries": [group_to_summary(g) for g in groups],
+    }
+
+
 # ---------- group detail ------------------------------------------------
+
+_VALID_DUP_TYPES = ("exact", "fuzzy", "combined", "custom")
+
 
 @router.get("/{dup_type}/group/{group_id}")
 def group_detail(dup_type: str, group_id: int,
                  sess: SessionData = Depends(require_dataframe)) -> dict:
-    if dup_type not in ("exact", "fuzzy", "combined"):
+    if dup_type not in _VALID_DUP_TYPES:
         raise HTTPException(status_code=400, detail="Invalid duplicate type")
     g = find_group(sess, dup_type, group_id)
     if g is None:
@@ -181,6 +301,8 @@ def remove_group(dup_type: str, group_id: int, body: RemoveGroupBody,
         sess.fuzzy_duplicates = [x for x in sess.fuzzy_duplicates if x.group_id != group_id]
     elif dup_type == "combined":
         sess.combined_duplicates = [x for x in sess.combined_duplicates if x.group_id != group_id]
+    elif dup_type == "custom":
+        sess.custom_duplicates = [x for x in sess.custom_duplicates if x.group_id != group_id]
     return {"ok": True, "removed": removed, "message": msg, "rows_remaining": len(sess.df)}
 
 
@@ -206,6 +328,8 @@ def bulk_action(dup_type: str, body: BulkActionBody,
         sess.fuzzy_duplicates = [x for x in sess.fuzzy_duplicates if x.group_id not in remaining_ids]
     elif dup_type == "combined":
         sess.combined_duplicates = [x for x in sess.combined_duplicates if x.group_id not in remaining_ids]
+    elif dup_type == "custom":
+        sess.custom_duplicates = [x for x in sess.custom_duplicates if x.group_id not in remaining_ids]
     return {
         "ok": True,
         "groups_processed": len(groups),
@@ -442,7 +566,20 @@ def preview_golden_record(
     """
     group = find_group(sess, dup_type, group_id)
     if not group:
-        raise HTTPException(status_code=404, detail="Group not found")
+        available = [int(g.group_id) for g in get_groups(sess, dup_type)]
+        logger.warning(
+            "preview_golden_record: group not found. dup_type=%s requested_id=%s "
+            "available_ids=%s session_id=%s",
+            dup_type, group_id, available, getattr(sess, "session_id", "?"),
+        )
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Group #{group_id} not found in {dup_type} scan results. "
+                f"Available groups: {available[:10]}{'...' if len(available) > 10 else ''}. "
+                "Re-run the scan and try again."
+            ),
+        )
 
     indices = list(group.indices)
     if not indices:
@@ -453,34 +590,65 @@ def preview_golden_record(
         rule = get_dedup_rule(rule_id)
         if rule:
             survivorship = rule.get("survivorship", survivorship)
+    # Custom rules stash their survivorship on the session at scan-time,
+    # so the dialog doesn't need to re-send it on every preview call.
+    if dup_type == "custom":
+        meta = (sess.duplicates_meta or {}).get("custom") or {}
+        survivorship = meta.get("survivorship", survivorship)
 
-    group_df = sess.df.loc[indices]
-    golden = compute_golden_record(group_df, survivorship)
+    try:
+        group_df = sess.df.loc[indices]
+    except Exception as exc:
+        logger.exception("preview_golden_record: df.loc failed indices=%s", indices)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not slice group rows: {exc}",
+        )
+    try:
+        golden = compute_golden_record(group_df, survivorship)
+    except Exception as exc:
+        logger.exception("preview_golden_record: golden computation failed")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not compute golden record: {exc}",
+        )
 
-    members = []
-    for idx in indices:
-        row = sess.df.loc[idx]
-        members.append({
-            "index": int(idx),
-            "is_survivor": int(idx) == golden.survivor_index,
-            "values": {
-                c: (None if pd.isna(row[c]) else row[c])
-                for c in sess.df.columns
+    try:
+        members: List[Dict[str, Any]] = []
+        for idx in indices:
+            row = sess.df.loc[idx]
+            # In rare cases of non-unique row indices, .loc returns a
+            # DataFrame instead of a Series — degrade gracefully by
+            # taking the first matching row so the response still ships.
+            if isinstance(row, pd.DataFrame):
+                row = row.iloc[0]
+            members.append({
+                "index": int(idx),
+                "is_survivor": int(idx) == int(golden.survivor_index),
+                "values": {
+                    str(c): _json_safe(row[c]) for c in sess.df.columns
+                },
+            })
+
+        response = {
+            "group_id": int(group.group_id),
+            "dup_type": str(dup_type),
+            "survivor_index": int(golden.survivor_index),
+            "survivorship_strategy": survivorship.get("strategy"),
+            "members": members,
+            "golden_record": {
+                str(c): _json_safe(v) for c, v in golden.record.items()
             },
-        })
+            "provenance": _json_safe(golden.provenance),
+        }
+    except Exception as exc:
+        logger.exception("preview_golden_record: response build failed")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not build golden-record response: {exc}",
+        )
 
-    return {
-        "group_id": group.group_id,
-        "dup_type": dup_type,
-        "survivor_index": golden.survivor_index,
-        "survivorship_strategy": survivorship.get("strategy"),
-        "members": members,
-        "golden_record": {
-            c: (None if (v is not None and pd.isna(v)) else v)
-            for c, v in golden.record.items()
-        },
-        "provenance": golden.provenance,
-    }
+    return response
 
 
 class ApplyGoldenBody(BaseModel):
@@ -511,6 +679,9 @@ def apply_golden_record(
         rule = get_dedup_rule(body.rule_id)
         if rule:
             survivorship = rule.get("survivorship", survivorship)
+    if dup_type == "custom":
+        meta = (sess.duplicates_meta or {}).get("custom") or {}
+        survivorship = meta.get("survivorship", survivorship)
 
     group_df = sess.df.loc[indices]
     golden = compute_golden_record(group_df, survivorship)
@@ -534,11 +705,10 @@ def apply_golden_record(
 
     return {
         "ok": True,
-        "survivor_index": golden.survivor_index,
-        "rows_dropped": before - after,
-        "rows_remaining": after,
+        "survivor_index": int(golden.survivor_index),
+        "rows_dropped": int(before - after),
+        "rows_remaining": int(after),
         "applied_record": {
-            c: (None if (v is not None and pd.isna(v)) else v)
-            for c, v in golden.record.items()
+            str(c): _json_safe(v) for c, v in golden.record.items()
         },
     }

@@ -116,13 +116,13 @@ export default function RuleGenerator() {
   // - opHint: short copy shown under the toggle, dimension-specific so
   //   stewards see exactly what the operator will compute
   const DIM_CAPS = {
-    'Validation':              { multi: true,  operator: true,  opHint: { AND: 'Every selected CDE must match the regex / rule.', OR: 'At least one selected CDE must match.' } },
-    'Completeness':            { multi: true,  operator: true,  opHint: { AND: 'All selected CDEs must be non-null on every row.', OR: 'At least one selected CDE must be non-null on every row.' } },
-    'Uniqueness':              { multi: true,  operator: true,  opHint: { AND: 'The selected CDEs must be unique as a composite key (tuple).', OR: 'Each selected CDE must be independently unique.' } },
-    'Standardisation':         { multi: false, operator: false },
-    'Accuracy':                { multi: false, operator: false },
-    'Timeliness':              { multi: false, operator: false },
-    'Cross-field Validation':  { multi: true,  operator: false }, // natural-language; engine resolves
+    'Validation':             { multi: true, operator: true,  opHint: { AND: 'Every selected CDE must match the regex / rule.', OR: 'At least one selected CDE must match.' } },
+    'Completeness':           { multi: true, operator: true,  opHint: { AND: 'All selected CDEs must be non-null on every row.', OR: 'At least one selected CDE must be non-null on every row.' } },
+    'Uniqueness':             { multi: true, operator: true,  opHint: { AND: 'The selected CDEs must be unique as a composite key (tuple).', OR: 'Each selected CDE must be independently unique.' } },
+    'Standardisation':        { multi: true, operator: true,  opHint: { AND: 'All selected CDEs must follow the same case / format standard.', OR: 'At least one selected CDE must follow the standard.' } },
+    'Accuracy':               { multi: true, operator: true,  opHint: { AND: 'All selected CDEs must satisfy the accuracy rule.', OR: 'At least one selected CDE must satisfy the accuracy rule.' } },
+    'Timeliness':             { multi: true, operator: true,  opHint: { AND: 'All selected date / time CDEs must meet the timeliness condition.', OR: 'At least one selected date / time CDE must meet the condition.' } },
+    'Cross-field Validation': { multi: true, operator: false }, // natural-language; engine resolves operator
   };
 
   useEffect(() => {
@@ -515,14 +515,22 @@ AZURE_OPENAI_MAX_RPM=60`}
           <TableContainer
             component={Paper}
             sx={{
-              maxHeight: 700,
+              maxHeight: 720,
               borderRadius: 2,
               border: '1px solid',
               borderColor: 'divider',
               boxShadow: 'none',
             }}
           >
+            {/*
+              Compacted layout: dropped "Business Field" (it duplicated
+              the Critical Data Element nine times out of ten), combined
+              the Result icon into the Issues column so we recover a full
+              column-width for the rule text, and tightened row paddings
+              so more rules fit on screen at once.
+            */}
             <Table stickyHeader size="small" sx={{
+              tableLayout: 'fixed',
               '& td, & th': { borderColor: 'divider' },
               '& tbody tr:hover': { bgcolor: '#F7F5FA' },
             }}>
@@ -532,22 +540,20 @@ AZURE_OPENAI_MAX_RPM=60`}
                     bgcolor: '#FBFAFC',
                     color: '#8A8A8A',
                     fontWeight: 700,
-                    fontSize: '0.72rem',
+                    fontSize: '0.7rem',
                     letterSpacing: '0.08em',
                     textTransform: 'uppercase',
-                    py: 1.25,
+                    py: 1,
                     borderBottom: '1px solid #E7E6E6',
                   },
                 }}>
-                  <TableCell sx={{ width: 56 }}>#</TableCell>
-                  <TableCell>Critical Data Element</TableCell>
-                  <TableCell>Business Field</TableCell>
-                  <TableCell sx={{ width: 110 }}>Source</TableCell>
-                  <TableCell sx={{ width: 150 }}>Dimension</TableCell>
+                  <TableCell sx={{ width: 44 }}>#</TableCell>
+                  <TableCell sx={{ width: 200 }}>Critical Data Element</TableCell>
+                  <TableCell sx={{ width: 78 }}>Source</TableCell>
+                  <TableCell sx={{ width: 140 }}>Dimension</TableCell>
                   <TableCell>Data Quality Rule</TableCell>
-                  <TableCell align="right" sx={{ width: 90 }}>Issues</TableCell>
-                  <TableCell sx={{ minWidth: 260 }}>Result</TableCell>
-                  <TableCell sx={{ width: 56 }} />
+                  <TableCell sx={{ width: 280 }}>Result</TableCell>
+                  <TableCell sx={{ width: 44 }} />
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -555,28 +561,30 @@ AZURE_OPENAI_MAX_RPM=60`}
                   const issues = Number(r['Issues Found']) || 0;
                   const example = String(r['Issues Found Example'] || '');
                   const isCrossField = r.Dimension === 'Cross-field Validation';
-                  // For cross-field rules: "manual review" means the
-                  // executor couldn't evaluate it. Anything else means
-                  // it ran and we should display real numbers.
                   const crossFieldUnevaluated = isCrossField && example.toLowerCase().includes('manual review');
                   const isOk = !example || example.startsWith('All values valid');
                   const dim = dimensionStyle(r.Dimension);
                   const src = sourceChipProps(r['Rule Source']);
                   return (
-                    <TableRow key={r['S.No'] ?? i} sx={{ '& td': { py: 1.1, fontSize: '0.84rem' } }}>
+                    <TableRow key={r['S.No'] ?? i} sx={{ '& td': { py: 0.85, fontSize: '0.82rem', verticalAlign: 'top' } }}>
                       <TableCell sx={{ color: 'text.secondary', fontVariantNumeric: 'tabular-nums' }}>
                         {i + 1}
                       </TableCell>
-                      <TableCell sx={{ fontWeight: 500 }}>{r['Column']}</TableCell>
-                      <TableCell sx={{ color: 'text.secondary' }}>{r['Business Field']}</TableCell>
+                      <TableCell sx={{
+                        fontWeight: 500,
+                        overflowWrap: 'anywhere',
+                        wordBreak: 'normal',
+                      }}>
+                        {r['Column']}
+                      </TableCell>
                       <TableCell>
                         <Chip
                           size="small"
                           variant="outlined"
                           label={src.label}
                           sx={{
-                            height: 22,
-                            fontSize: '0.7rem',
+                            height: 20,
+                            fontSize: '0.68rem',
                             fontWeight: 600,
                             borderRadius: 1,
                             ...src.sx,
@@ -587,59 +595,77 @@ AZURE_OPENAI_MAX_RPM=60`}
                         <Box sx={{
                           display: 'inline-flex',
                           alignItems: 'center',
-                          gap: 0.75,
-                          px: 1,
+                          gap: 0.625,
+                          px: 0.875,
                           py: 0.25,
                           borderRadius: 1,
                           bgcolor: dim.tint,
                           color: dim.fg,
-                          fontSize: '0.74rem',
+                          fontSize: '0.72rem',
                           fontWeight: 600,
+                          maxWidth: '100%',
                         }}>
                           <Box sx={{
-                            width: 6, height: 6, borderRadius: '50%', bgcolor: dim.dot,
+                            width: 6, height: 6, borderRadius: '50%', bgcolor: dim.dot, flexShrink: 0,
                           }} />
-                          {r.Dimension}
+                          <Box component="span" sx={{
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}>
+                            {r.Dimension}
+                          </Box>
                         </Box>
                       </TableCell>
-                      <TableCell sx={{ color: 'text.primary' }}>{r['Data Quality Rule']}</TableCell>
-                      <TableCell align="right" sx={{
-                        fontVariantNumeric: 'tabular-nums',
-                        fontWeight: 600,
-                        color: crossFieldUnevaluated
-                          ? 'text.disabled'
-                          : issues > 0 ? 'error.main' : 'text.disabled',
+                      <TableCell sx={{
+                        color: 'text.primary',
+                        overflowWrap: 'anywhere',
+                        lineHeight: 1.45,
                       }}>
-                        {crossFieldUnevaluated ? '—' : issues}
+                        {r['Data Quality Rule']}
                       </TableCell>
-                      <TableCell sx={{ minWidth: 260, maxWidth: 360 }}>
+                      <TableCell>
                         <Stack direction="row" spacing={0.75} alignItems="flex-start">
                           {crossFieldUnevaluated ? (
-                            <InfoOutlinedIcon sx={{ fontSize: 16, color: 'info.main', mt: '3px', flexShrink: 0 }} />
+                            <InfoOutlinedIcon sx={{ fontSize: 16, color: 'info.main', mt: '2px', flexShrink: 0 }} />
                           ) : isOk ? (
-                            <CheckCircleOutlineIcon sx={{ fontSize: 16, color: 'success.main', mt: '3px', flexShrink: 0 }} />
+                            <CheckCircleOutlineIcon sx={{ fontSize: 16, color: 'success.main', mt: '2px', flexShrink: 0 }} />
                           ) : (
-                            <ErrorOutlineIcon sx={{ fontSize: 16, color: 'warning.main', mt: '3px', flexShrink: 0 }} />
+                            <ErrorOutlineIcon sx={{ fontSize: 16, color: 'warning.main', mt: '2px', flexShrink: 0 }} />
                           )}
-                          <Typography variant="body2" sx={{
-                            color: crossFieldUnevaluated ? 'text.secondary' : isOk ? 'text.secondary' : 'text.primary',
-                            fontSize: '0.8rem',
-                            lineHeight: 1.5,
-                            overflowWrap: 'anywhere',
-                            wordBreak: 'normal',
-                          }}>
-                            {crossFieldUnevaluated
-                              ? 'Cross-field — manual review'
-                              : isOk ? 'All values valid' : example}
-                          </Typography>
+                          <Box sx={{ minWidth: 0 }}>
+                            {/* Issues count chip — only when non-trivial */}
+                            {!crossFieldUnevaluated && issues > 0 && (
+                              <Box component="span" sx={{
+                                display: 'inline-block',
+                                fontVariantNumeric: 'tabular-nums',
+                                fontWeight: 700,
+                                color: 'error.main',
+                                fontSize: '0.78rem',
+                                mr: 0.75,
+                              }}>
+                                {issues} issue{issues === 1 ? '' : 's'}
+                              </Box>
+                            )}
+                            <Typography component="span" variant="body2" sx={{
+                              color: crossFieldUnevaluated ? 'text.secondary' : isOk ? 'text.secondary' : 'text.primary',
+                              fontSize: '0.78rem',
+                              lineHeight: 1.45,
+                              overflowWrap: 'anywhere',
+                              wordBreak: 'normal',
+                            }}>
+                              {crossFieldUnevaluated
+                                ? 'Cross-field — manual review'
+                                : isOk ? 'All values valid' : example}
+                            </Typography>
+                          </Box>
                         </Stack>
                       </TableCell>
-                      <TableCell sx={{ width: 56 }}>
+                      <TableCell>
                         <Tooltip title="Delete rule">
                           <IconButton
                             size="small"
                             onClick={() => {
-                              // map back to absolute index in `rules`
                               const absoluteIdx = rules.indexOf(r);
                               if (absoluteIdx >= 0) deleteRule(absoluteIdx);
                             }}
@@ -653,7 +679,7 @@ AZURE_OPENAI_MAX_RPM=60`}
                 })}
                 {filteredRules.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={8} align="center" sx={{ py: 4, color: 'text.secondary' }}>
+                    <TableCell colSpan={7} align="center" sx={{ py: 4, color: 'text.secondary' }}>
                       No {activeDim === 'All' ? '' : `${activeDim} `}rules to show.
                     </TableCell>
                   </TableRow>

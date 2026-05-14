@@ -649,6 +649,16 @@ Examples:
 9. Set issues_found to 0 if validation passes
 10. Set issues_found_example to "All values valid - No issues found" if no issues
 
+11. **NO VAGUE / TAUTOLOGICAL RULES** — every rule must be CHECKABLE.
+    BAD  (rejected): "Entity Code must accurately represent the unique identifier"
+    BAD  (rejected): "Status must reflect a valid status"
+    BAD  (rejected): "ID must be valid"
+    GOOD (accepted): "Entity Code must be exactly 8 characters and uppercase alphanumeric"
+    GOOD (accepted): "Status must be one of [Active, Inactive, Suspended]"
+    GOOD (accepted): "ID must be a UUID v4 (8-4-4-4-12 hex)"
+    If you cannot state a concrete, executable check for a dimension on
+    this column, OMIT that rule rather than emit a vague one.
+
 === OUTPUT FORMAT (STRICT JSON) ===
 
 Return an array of rule objects (one per dimension), wrapped in a "rules" key.

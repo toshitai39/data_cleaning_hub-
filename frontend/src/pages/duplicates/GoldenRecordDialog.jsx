@@ -42,7 +42,32 @@ export default function GoldenRecordDialog({
         params: rule_id ? { rule_id } : {},
       })
       .then(({ data }) => setData(data))
-      .catch((e) => setError(e?.response?.data?.detail || 'Could not load group'))
+      .catch((e) => {
+        const status = e?.response?.status;
+        const detail = e?.response?.data?.detail;
+        // Surface everything to the browser console so we can diagnose
+        // when the backend returns an unexpected error shape.
+        // eslint-disable-next-line no-console
+        console.error('[GoldenRecordDialog] load failed', {
+          status, detail, url: e?.config?.url, fullError: e,
+        });
+        if (status === 404) {
+          setError(
+            typeof detail === 'string' && detail
+              ? detail
+              : 'This duplicate group is no longer available — re-run the scan and try again.',
+          );
+        } else if (typeof detail === 'string' && detail) {
+          setError(detail);
+        } else if (Array.isArray(detail)) {
+          // FastAPI Pydantic 422 — flatten validation errors
+          setError(detail.map((d) => d.msg || JSON.stringify(d)).join('; '));
+        } else if (detail && typeof detail === 'object') {
+          setError(detail.message || JSON.stringify(detail));
+        } else {
+          setError(`Could not load group (HTTP ${status || '?'})`);
+        }
+      })
       .finally(() => setLoading(false));
   }, [open, dup_type, group_id, rule_id]);
 

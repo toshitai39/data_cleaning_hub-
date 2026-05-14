@@ -32,6 +32,10 @@ class SessionData:
     exact_duplicates: List[Any] = field(default_factory=list)
     fuzzy_duplicates: List[Any] = field(default_factory=list)
     combined_duplicates: List[Any] = field(default_factory=list)
+    # Custom user-authored deduplication rule results (multi-CDE with
+    # AND / OR combinator + survivorship). Treated as a fourth dup_type
+    # by the group-find / golden-record / apply endpoints.
+    custom_duplicates: List[Any] = field(default_factory=list)
     # cached scan params per duplicate type for re-rendering
     duplicates_meta: Dict[str, Any] = field(default_factory=dict)
     ai_validation_rules: Optional[pd.DataFrame] = None

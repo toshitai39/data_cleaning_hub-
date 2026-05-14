@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from core.profiler import DataProfilerEngine
+from models.data_models import DuplicateGroup
 
 from ..session_store import SessionData
 
@@ -89,6 +90,133 @@ def scan_combined(sess: SessionData, exact_cols: List[str], fuzzy_cols: List[str
     return groups
 
 
+def scan_custom(
+    sess: SessionData,
+    columns: List[str],
+    operator: str,
+) -> List[Any]:
+    """User-authored deduplication scan: multi-CDE with AND / OR combinator.
+
+    AND → two rows are duplicates iff they agree on EVERY selected CDE
+          (composite-key match). Standard pandas duplicated(subset=cols).
+    OR  → two rows are duplicates iff they agree on AT LEAST ONE selected
+          CDE (union of per-column duplicate masks, then merge groups by
+          shared rows so transitive matches collapse into one cluster).
+
+    Both modes ignore NaN on the "match" side — a blank doesn't count as
+    equal to another blank, which avoids the classic "all empty PANs
+    grouped together" trap.
+    """
+    df = sess.df
+    if df is None or df.empty or not columns:
+        sess.custom_duplicates = []
+        sess.duplicates_meta["custom"] = {"columns": columns, "operator": operator}
+        return []
+
+    op = (operator or "AND").strip().upper()
+    if op not in ("AND", "OR"):
+        op = "AND"
+
+    groups: List[DuplicateGroup] = []
+    if op == "AND":
+        # Composite-key duplicates. dropna=True so all-blank composite
+        # rows don't get clustered with each other.
+        sub = df[columns]
+        mask = sub.duplicated(keep=False) & sub.notna().all(axis=1)
+        if mask.any():
+            keyed = sub[mask].copy()
+            for gid, (key, sub_df) in enumerate(keyed.groupby(columns, dropna=True), start=1):
+                indices = list(sub_df.index)
+                if len(indices) < 2:
+                    continue
+                rep = key if not isinstance(key, tuple) else " | ".join(str(k) for k in key)
+                values = [
+                    {c: (None if pd.isna(df.at[i, c]) else df.at[i, c]) for c in df.columns}
+                    for i in indices
+                ]
+                groups.append(DuplicateGroup(
+                    group_id=gid,
+                    indices=indices,
+                    values=values,
+                    match_type="custom_and",
+                    similarity_score=100.0,
+                    key_columns=list(columns),
+                    representative_value=str(rep),
+                ))
+    else:
+        # OR: build per-column duplicate clusters, then collapse rows
+        # that share ANY column-level match into the same cluster via
+        # union-find.
+        parent: Dict[int, int] = {}
+
+        def _find(x: int) -> int:
+            # path-compressing find
+            while parent.get(x, x) != x:
+                parent[x] = parent.get(parent[x], parent[x])
+                x = parent[x]
+            return x
+
+        def _union(a: int, b: int) -> None:
+            ra, rb = _find(a), _find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        for c in columns:
+            col = df[c]
+            non_null = col.dropna()
+            if non_null.empty:
+                continue
+            # All rows sharing a non-null value with another row.
+            dup_mask = col.duplicated(keep=False) & col.notna()
+            if not dup_mask.any():
+                continue
+            for val, idx_group in df.loc[dup_mask].groupby(c, dropna=True).groups.items():
+                idx_list = list(idx_group)
+                if len(idx_list) < 2:
+                    continue
+                root = idx_list[0]
+                parent.setdefault(int(root), int(root))
+                for other in idx_list[1:]:
+                    parent.setdefault(int(other), int(other))
+                    _union(int(root), int(other))
+
+        # Bucket by root
+        clusters: Dict[int, List[int]] = {}
+        for node in list(parent.keys()):
+            r = _find(node)
+            clusters.setdefault(r, []).append(node)
+
+        for gid, (_, idxs) in enumerate(
+            sorted(clusters.items(), key=lambda kv: -len(kv[1])), start=1,
+        ):
+            idxs = sorted(set(idxs))
+            if len(idxs) < 2:
+                continue
+            rep_parts: List[str] = []
+            for c in columns:
+                v = df.at[idxs[0], c]
+                if pd.notna(v):
+                    rep_parts.append(f"{c}={v}")
+            rep = " | ".join(rep_parts[:3]) or f"cluster of {len(idxs)} rows"
+            values = [
+                {col: (None if pd.isna(df.at[i, col]) else df.at[i, col]) for col in df.columns}
+                for i in idxs
+            ]
+            groups.append(DuplicateGroup(
+                group_id=gid,
+                indices=idxs,
+                values=values,
+                match_type="custom_or",
+                similarity_score=100.0,
+                key_columns=list(columns),
+                representative_value=rep,
+            ))
+
+    sess.custom_duplicates = groups
+    sess.duplicates_meta["custom"] = {"columns": columns, "operator": op}
+    return groups
+
+
 def get_groups(sess: SessionData, dup_type: str) -> List[Any]:
     if dup_type == "exact":
         return sess.exact_duplicates or []
@@ -96,6 +224,8 @@ def get_groups(sess: SessionData, dup_type: str) -> List[Any]:
         return sess.fuzzy_duplicates or []
     if dup_type == "combined":
         return sess.combined_duplicates or []
+    if dup_type == "custom":
+        return sess.custom_duplicates or []
     return []
 
 

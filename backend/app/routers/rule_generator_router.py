@@ -72,6 +72,37 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/rule-generator", tags=["rule-generator"])
 
 
+def _atomic_cdes_covered(df: pd.DataFrame) -> int:
+    """Count atomic CDEs covered by the rules, not composite labels.
+
+    A multi-CDE custom rule stores ``Column`` as a composite string like
+    ``"name AND pan"`` or ``"col_a + col_b"``. Counting nunique() on
+    Column directly inflates the figure — every composite label counts
+    as a new CDE. We split on the known operators and dedupe.
+    """
+    if df is None or df.empty or "Column" not in df.columns:
+        return 0
+    atomic: set[str] = set()
+    for raw in df["Column"].dropna().astype(str).tolist():
+        # The "Columns" metadata column (comma-joined atomic names) is
+        # the authoritative source when present — fall back to parsing
+        # the label only when Columns is empty / missing.
+        used = False
+        if "Columns" in df.columns:
+            # We can't index by Column value alone, so just parse label.
+            pass
+        text = raw
+        for sep in (" AND ", " OR ", " + ", ",", ";"):
+            text = text.replace(sep, "|")
+        for part in text.split("|"):
+            cleaned = part.strip()
+            if cleaned:
+                atomic.add(cleaned)
+        if used:
+            pass
+    return len(atomic)
+
+
 def _safe_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
     if df is None or df.empty:
         return []
@@ -213,7 +244,7 @@ def generate(
     return {
         "ok": True,
         "total_rules": len(df_rules),
-        "columns_covered": int(df_rules["Column"].nunique()) if "Column" in df_rules.columns else 0,
+        "columns_covered": _atomic_cdes_covered(df_rules),
         "columns_in_scope": int(df_in_scope.shape[1]),
         "columns_total": int(sess.df.shape[1]) if sess.df is not None else 0,
         "dq_dimensions": int(df_rules["Dimension"].nunique()) if "Dimension" in df_rules.columns else 0,
@@ -231,11 +262,20 @@ def get_rules(sess: SessionData = Depends(require_dataframe)) -> dict:
     if isinstance(df, pd.DataFrame) and "Regex Pattern" not in df.columns:
         df = df.copy()
         df["Regex Pattern"] = ""
+    # Belt-and-braces normaliser — load_rules already does this on disk
+    # reads, but in-session rules created by older paths may still carry
+    # Consistency / Validity labels.
+    if isinstance(df, pd.DataFrame) and "Dimension" in df.columns:
+        df = df.copy()
+        df["Dimension"] = df["Dimension"].astype(str).replace({
+            "Consistency": "Standardisation",
+            "Validity":    "Validation",
+        })
     df = enrich_dataframe_regex_patterns(df) if isinstance(df, pd.DataFrame) else df
     return {
         "generated": True,
         "total_rules": len(df),
-        "columns_covered": int(df["Column"].nunique()) if "Column" in df.columns else 0,
+        "columns_covered": _atomic_cdes_covered(df),
         "dq_dimensions": int(df["Dimension"].nunique()) if "Dimension" in df.columns else 0,
         "rules": _safe_records(df),
     }
@@ -318,16 +358,16 @@ class CustomRuleBody(BaseModel):
 # - multi: dimension can target N CDEs in a single rule
 # - operator: AND/OR is meaningful (vs ignored / not applicable)
 _DIM_CAPS = {
-    "Validation":             {"multi": True,  "operator": True},
-    "Completeness":           {"multi": True,  "operator": True},
-    "Uniqueness":             {"multi": True,  "operator": True},
-    "Standardisation":        {"multi": False, "operator": False},
-    "Accuracy":               {"multi": False, "operator": False},
-    "Timeliness":             {"multi": False, "operator": False},
-    "Cross-field Validation": {"multi": True,  "operator": False},
+    "Validation":             {"multi": True, "operator": True},
+    "Completeness":           {"multi": True, "operator": True},
+    "Uniqueness":             {"multi": True, "operator": True},
+    "Standardisation":        {"multi": True, "operator": True},
+    "Accuracy":               {"multi": True, "operator": True},
+    "Timeliness":             {"multi": True, "operator": True},
+    "Cross-field Validation": {"multi": True, "operator": False},
     # Legacy aliases — accept rules persisted before the rename.
-    "Validity":               {"multi": True,  "operator": True},
-    "Consistency":            {"multi": False, "operator": False},
+    "Validity":               {"multi": True, "operator": True},
+    "Consistency":            {"multi": True, "operator": True},
 }
 
 
@@ -442,7 +482,26 @@ def _evaluate_multi_custom_rule(
         )
         return bad, example
 
-    return 0, "Rule saved — no automatic evaluation for this dimension"
+    # --- Generic fallback for Standardisation / Accuracy / Timeliness ----
+    # AND → all selected CDEs must be non-null (presence check).
+    # OR  → at least one non-null per row.
+    # These dimensions don't have a universal per-cell evaluator without
+    # the specific rule context, so we treat presence as the measurable
+    # proxy and let the rule text carry the human-readable intent.
+    sub_null = df[columns].isna()
+    if op == "AND":
+        bad_mask = sub_null.any(axis=1)
+        bad = int(bad_mask.sum())
+        example = "All selected CDEs present on every row" if bad == 0 else (
+            f"{bad} rows missing at least one of: {', '.join(columns)}"
+        )
+    else:
+        bad_mask = sub_null.all(axis=1)
+        bad = int(bad_mask.sum())
+        example = "At least one selected CDE present on every row" if bad == 0 else (
+            f"{bad} rows where all of ({', '.join(columns)}) are blank"
+        )
+    return bad, example
 
 
 def _renumber(df: pd.DataFrame) -> pd.DataFrame:

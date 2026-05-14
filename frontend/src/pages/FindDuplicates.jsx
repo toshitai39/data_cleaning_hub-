@@ -7,7 +7,7 @@ import { useDataset } from '../context/DatasetContext.jsx';
 import ExactTab from './duplicates/ExactTab.jsx';
 import FuzzyTab from './duplicates/FuzzyTab.jsx';
 import CombinedTab from './duplicates/CombinedTab.jsx';
-import LibraryRulesTab from './duplicates/LibraryRulesTab.jsx';
+import CustomRuleTab from './duplicates/CustomRuleTab.jsx';
 
 export default function FindDuplicates() {
   const { state } = useDataset();
@@ -42,14 +42,14 @@ export default function FindDuplicates() {
 
       <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
         <Tabs value={tab} onChange={(_, v) => setTab(v)}>
-          <Tab label="Library rules" />
+          <Tab label="Custom Rule" />
           <Tab label="Exact Match" />
           <Tab label="Fuzzy Match" />
           <Tab label="Combined Match" />
         </Tabs>
       </Box>
 
-      {tab === 0 && <LibraryRulesTab />}
+      {tab === 0 && <CustomRuleTab allColumns={columns.all} />}
       {tab === 1 && <ExactTab allColumns={columns.all} />}
       {tab === 2 && <FuzzyTab objectColumns={columns.object_only} />}
       {tab === 3 && <CombinedTab allColumns={columns.all} objectColumns={columns.object_only} />}
