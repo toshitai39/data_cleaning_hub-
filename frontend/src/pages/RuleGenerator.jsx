@@ -4,6 +4,7 @@ import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Divider,
   Tooltip, Tabs, Tab, Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, MenuItem, IconButton, Autocomplete,
+  ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -100,11 +101,29 @@ export default function RuleGenerator() {
     dimension: 'Validation',
     column: '',
     columns: [],
+    operator: 'AND',
     data_quality_rule: '',
     regex_pattern: '',
     validation_expression: '',
   };
   const [customForm, setCustomForm] = useState(blankCustom);
+
+  // Capability map — which dimensions support multi-CDE + AND/OR, and
+  // what the operator actually means for each. Drives the dialog UI and
+  // is mirrored on the backend (single source of truth in spirit).
+  // - multi: dimension can target N CDEs in one rule
+  // - operator: AND/OR is meaningful (vs ignored)
+  // - opHint: short copy shown under the toggle, dimension-specific so
+  //   stewards see exactly what the operator will compute
+  const DIM_CAPS = {
+    'Validation':              { multi: true,  operator: true,  opHint: { AND: 'Every selected CDE must match the regex / rule.', OR: 'At least one selected CDE must match.' } },
+    'Completeness':            { multi: true,  operator: true,  opHint: { AND: 'All selected CDEs must be non-null on every row.', OR: 'At least one selected CDE must be non-null on every row.' } },
+    'Uniqueness':              { multi: true,  operator: true,  opHint: { AND: 'The selected CDEs must be unique as a composite key (tuple).', OR: 'Each selected CDE must be independently unique.' } },
+    'Standardisation':         { multi: false, operator: false },
+    'Accuracy':                { multi: false, operator: false },
+    'Timeliness':              { multi: false, operator: false },
+    'Cross-field Validation':  { multi: true,  operator: false }, // natural-language; engine resolves
+  };
 
   useEffect(() => {
     api.get('/rule-generator/llm-status').then((r) => setLlm(r.data)).catch(() => setLlm({ configured: false }));
@@ -184,18 +203,30 @@ export default function RuleGenerator() {
   const saveCustom = async () => {
     setCustomBusy(true); setCustomErr('');
     try {
+      const caps = DIM_CAPS[customForm.dimension] || { multi: false, operator: false };
       const isCross = customForm.dimension === 'Cross-field Validation';
+      const cols = caps.multi ? (customForm.columns || []) : [];
+      const single = !caps.multi ? (customForm.column || '') : '';
+      // Multi-CDE rules ship `columns` + operator; single-CDE ship `column`.
+      // Cross-field still uses `columns` but operator is irrelevant — the
+      // natural-language resolver decides the combinator.
       const payload = {
         dimension: customForm.dimension,
         data_quality_rule: customForm.data_quality_rule,
         regex_pattern: customForm.regex_pattern || '',
-        // No client-side pandas authoring anymore — backend engine
-        // resolves cross-field rules via family parsers + LLM translator.
         validation_expression: '',
-        ...(isCross
-          ? { columns: customForm.columns }
-          : { column: customForm.column }),
+        ...(caps.multi
+          ? { columns: cols, ...(caps.operator ? { operator: customForm.operator } : {}) }
+          : { column: single }),
       };
+      // When the steward picks multi-CDE but only one CDE on a dimension
+      // that supports multi, treat it as a single-column rule — operator
+      // is meaningless and the backend handles it cleanly.
+      if (caps.multi && !isCross && cols.length === 1) {
+        payload.column = cols[0];
+        delete payload.columns;
+        delete payload.operator;
+      }
       const { data } = await api.post('/rule-generator/rules/custom', payload);
       setRules(data.rules);
       setStats((s) => ({ ...s, total_rules: data.total_rules }));
@@ -669,28 +700,75 @@ AZURE_OPENAI_MAX_RPM=60`}
               ))}
             </TextField>
 
-            {customForm.dimension === 'Cross-field Validation' ? (
-              <Autocomplete
-                multiple
-                size="small"
-                options={scope.all}
-                value={customForm.columns}
-                onChange={(_, v) => setCustomForm((f) => ({ ...f, columns: v }))}
-                renderInput={(params) => (
-                  <TextField {...params} label="Critical data elements (pick 2 or more)" />
-                )}
-              />
-            ) : (
-              <Autocomplete
-                size="small"
-                options={scope.all}
-                value={customForm.column || null}
-                onChange={(_, v) => setCustomForm((f) => ({ ...f, column: v || '' }))}
-                renderInput={(params) => (
-                  <TextField {...params} label="Critical data element" />
-                )}
-              />
-            )}
+            {(() => {
+              const caps = DIM_CAPS[customForm.dimension] || { multi: false, operator: false };
+              if (!caps.multi) {
+                return (
+                  <Autocomplete
+                    size="small"
+                    options={scope.all}
+                    value={customForm.column || null}
+                    onChange={(_, v) => setCustomForm((f) => ({ ...f, column: v || '' }))}
+                    renderInput={(params) => (
+                      <TextField {...params} label="Critical data element" />
+                    )}
+                  />
+                );
+              }
+              // Multi-CDE picker + (optionally) AND/OR operator
+              const cols = customForm.columns || [];
+              const showOp = caps.operator && cols.length >= 2;
+              return (
+                <>
+                  <Autocomplete
+                    multiple
+                    size="small"
+                    options={scope.all}
+                    value={cols}
+                    onChange={(_, v) => setCustomForm((f) => ({ ...f, columns: v }))}
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label={
+                          customForm.dimension === 'Cross-field Validation'
+                            ? 'Critical data elements (pick 2 or more)'
+                            : 'Critical data element(s) — pick 1 or more'
+                        }
+                      />
+                    )}
+                  />
+                  {showOp && (
+                    <Box>
+                      <Stack direction="row" spacing={1} alignItems="center">
+                        <Typography sx={{ fontSize: 12.5, fontWeight: 600, color: '#1A1A1A', minWidth: 78 }}>
+                          Combine using
+                        </Typography>
+                        <ToggleButtonGroup
+                          exclusive
+                          size="small"
+                          value={customForm.operator}
+                          onChange={(_, v) => v && setCustomForm((f) => ({ ...f, operator: v }))}
+                          sx={{
+                            '& .MuiToggleButton-root': {
+                              textTransform: 'none', fontSize: 12, fontWeight: 700,
+                              px: 1.75, py: 0.4, letterSpacing: '0.04em',
+                            },
+                          }}
+                        >
+                          <ToggleButton value="AND">AND</ToggleButton>
+                          <ToggleButton value="OR">OR</ToggleButton>
+                        </ToggleButtonGroup>
+                      </Stack>
+                      {caps.opHint && (
+                        <Typography sx={{ fontSize: 11.5, color: '#7C7892', mt: 0.6, ml: '86px' }}>
+                          {caps.opHint[customForm.operator] || ''}
+                        </Typography>
+                      )}
+                    </Box>
+                  )}
+                </>
+              );
+            })()}
 
             <TextField
               size="small"

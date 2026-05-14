@@ -82,16 +82,45 @@ def _column_payload(name: str, series: pd.Series) -> Dict[str, Any]:
 
 _SYSTEM_PROMPT = (
     "You are a senior master-data analyst. For each column in a tabular "
-    "dataset, write a clear one-sentence description of what the column "
-    "represents and decide whether it is a Critical Data Element (CDE) — "
-    "a field important enough that the business would want data-quality "
-    "rules running against it.\n\n"
-    "A column is a CDE when it is one of: a primary identifier; a tax / "
-    "regulatory identifier; a legal or trade name; a country / currency / "
-    "company code that drives downstream segmentation; an account number; "
-    "or any other attribute the master-data owner would gate workflows on. "
+    "dataset you receive, produce three things:\n\n"
+    "  1. A clear one-sentence description of what the column represents.\n"
+    "  2. A boolean `recommended` flag — true iff the column is a Critical "
+    "Data Element (CDE), i.e. a field important enough that the business "
+    "would want data-quality rules running against it. CDEs are typically "
+    "primary identifiers, tax / regulatory identifiers, legal or trade "
+    "names, country / currency / company codes, or account numbers. "
     "Audit timestamps, soft-delete flags, free-text comments, and purely "
-    "descriptive attributes (city, fax, search-term) are typically NOT CDEs.\n\n"
+    "descriptive attributes (city, fax, search-term) are typically NOT CDEs.\n"
+    "  3. A `semantic_type` — exactly one short snake_case tag from the "
+    "controlled list below that best classifies the column's value format. "
+    "This drives downstream format-validation scoring. BIAS STRONGLY toward "
+    "the specific identifier tag when either the column name OR the sample "
+    "values match — never fall back to `alphanumeric_id`, `numeric_id`, "
+    "`enum_code`, or `other` when a specific tag applies.\n\n"
+    "Controlled tag list:\n"
+    "       pan, gstin, tan, cin, vat, ein, ssn, aadhaar, iban, swift, ifsc, "
+    "iso_country, iso_currency, email, phone, url, postal_code, indian_pin, "
+    "numeric_id, alphanumeric_id, account_number, date, datetime, year, "
+    "boolean, amount, quantity, percentage, free_text_name, free_text_address, "
+    "free_text_description, enum_code, other.\n\n"
+    "Examples of correct classification (memorise these — they cover the "
+    "most common mistakes):\n"
+    "  • column `pan_number` with values like ABCDE1234F → `pan` (NOT alphanumeric_id)\n"
+    "  • column `STCD1` with samples ABCDE1234F → `pan` (NOT tan, NOT alphanumeric_id)\n"
+    "  • column `gstin` with values like 27ABCDE1234F1Z5 → `gstin` (NOT alphanumeric_id)\n"
+    "  • column `STCD2` with samples 27ABCDE1234F1Z5 → `gstin`\n"
+    "  • column `email` with values like a@b.com → `email` (NOT free_text_description)\n"
+    "  • column `LAND1` with 2-letter values like IN, US → `iso_country` (NOT enum_code)\n"
+    "  • column `WAERS` with values INR, USD → `iso_currency`\n"
+    "  • column `pincode` with values like 400001 → `indian_pin`\n"
+    "  • column `ifsc_code` with values HDFC0000001 → `ifsc`\n"
+    "  • column `mobile` with values +91-9876543210 → `phone`\n"
+    "  • column `customer_name` with values like 'Acme Pvt Ltd' → `free_text_name`\n"
+    "  • column `created_at` with timestamps → `datetime`\n\n"
+    "Use `other` ONLY when no tag from the controlled list could plausibly "
+    "apply. Free-text fields that are clearly names go to `free_text_name`, "
+    "addresses to `free_text_address`, longer descriptions to "
+    "`free_text_description` — not `other`.\n\n"
     "Always return strict JSON. No markdown."
 )
 
@@ -121,7 +150,8 @@ def _build_user_prompt(columns: List[Dict[str, Any]], schema_hint: Optional[Dict
           '      "name": "<original column name, copied verbatim>",\n'
           '      "description": "<one sentence, plain English, no jargon dump>",\n'
           '      "recommended": true | false,\n'
-          '      "reason": "<≤12 words explaining the recommendation>"\n'
+          '      "reason": "<≤12 words explaining the recommendation>",\n'
+          '      "semantic_type": "<one tag from the controlled list>"\n'
           '    }\n'
           '  ]\n'
           "}\n\n"
@@ -130,9 +160,11 @@ def _build_user_prompt(columns: List[Dict[str, Any]], schema_hint: Optional[Dict
           "2. Copy each column name verbatim into the `name` field — do not rename, case-fold, or translate.\n"
           "3. `description` must be a single sentence describing the field's meaning. If the column is clearly an "
           "ERP technical code (e.g. SAP table.field), expand the acronym. Mention the format when obvious from samples.\n"
-          "4. `recommended` is true only if the field is a CDE per the system rules above.\n"
+          "4. `recommended` is true only if the field is a CDE per the system rules.\n"
           "5. `reason` is short — it answers \"why recommended\" or \"why not\".\n"
-          "6. JSON only. No markdown fences, no commentary."
+          "6. `semantic_type` is exactly one tag from the controlled list in the system message. "
+          "When unsure between two tags, pick the more specific one. Default to 'other' only when no tag applies.\n"
+          "7. JSON only. No markdown fences, no commentary."
     )
 
 
@@ -252,10 +284,12 @@ def _call_llm_batch(payload: List[Dict[str, Any]], schema_hint: Optional[Dict[st
         description = str(entry.get("description", "")).strip()
         reason = str(entry.get("reason", "")).strip()
         recommended = bool(entry.get("recommended", False))
+        semantic_type = str(entry.get("semantic_type", "")).strip().lower() or "other"
         out[name] = {
             "description": description,
             "recommended": recommended,
             "reason": reason,
+            "semantic_type": semantic_type,
             "source": "ai",
         }
     if not out:
@@ -266,9 +300,10 @@ def _call_llm_batch(payload: List[Dict[str, Any]], schema_hint: Optional[Dict[st
 def dtype_fallback_meta(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     """Per-column dtype-only meta. Used when the LLM is unconfigured.
 
-    Distinct entry point so the caller can decide whether to persist this
-    (the router won't — fallback meta is never cached, so a retry succeeds
-    the moment credentials are available).
+    Every entry includes ``semantic_type='other'`` so downstream consumers
+    (Validation / Uniqueness scorers, cache-staleness check) never see an
+    entry that's missing the field — that field's presence is the schema
+    contract for cached cde_meta.
     """
     if df is None:
         return {}
@@ -281,6 +316,7 @@ def dtype_fallback_meta(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
             "description": desc,
             "recommended": False,
             "reason": "AI not configured — no automatic recommendation.",
+            "semantic_type": "other",
             "source": "fallback",
         }
     return out
@@ -317,11 +353,14 @@ def generate_cde_meta(
 
     # If the model dropped any columns from the response, fill them from the
     # dtype fallback so the UI still has a row for every input column.
+    # Every gap-filler must include `semantic_type` so the cache stays
+    # uniform — Validation / Uniqueness scorers depend on that field.
     fallback = dtype_fallback_meta(df) if any(c not in merged for c in all_cols) else {}
     for col in all_cols:
         if col not in merged or not merged[col].get("description"):
             merged[col] = fallback.get(col, {
-                "description": "", "recommended": False, "reason": "", "source": "fallback",
+                "description": "", "recommended": False, "reason": "",
+                "semantic_type": "other", "source": "fallback",
             })
 
     return merged

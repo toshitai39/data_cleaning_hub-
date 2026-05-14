@@ -8,24 +8,31 @@ import PageHeader from '../components/PageHeader.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import { useDataset } from '../context/DatasetContext.jsx';
 import KpiBar from './profiling/KpiBar.jsx';
-import OverviewTab from './profiling/OverviewTab.jsx';
-import DriftTab from './profiling/DriftTab.jsx';
-import MatchRulesTab from './profiling/MatchRulesTab.jsx';
+import ExecutiveSummaryTab from './profiling/ExecutiveSummaryTab.jsx';
 import ExportTab from './profiling/ExportTab.jsx';
-import AiRulesTab from './profiling/AiRulesTab.jsx';
 
 export default function DataProfiling() {
   const { state, refresh } = useDataset();
   const [tab, setTab] = useState(0);
   const [kpi, setKpi] = useState(null);
+  const [executiveSummary, setExecutiveSummary] = useState(null);
   const [profiled, setProfiled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
+  // Pull both the basic KPI (rows / column count / completeness) and the
+  // full quality scorecard so the strip at the top can show every
+  // dimension's score alongside the dataset basics — one glance, all
+  // the relevant numbers visible without scrolling.
   const load = () =>
-    api.get('/profile/kpi')
-      .then((r) => { setKpi(r.data); setProfiled(true); })
-      .catch(() => setProfiled(false));
+    Promise.all([
+      api.get('/profile/kpi'),
+      api.get('/profile/executive-summary').catch(() => ({ data: null })),
+    ]).then(([kpiR, esR]) => {
+      setKpi(kpiR.data);
+      setExecutiveSummary(esR?.data || null);
+      setProfiled(true);
+    }).catch(() => setProfiled(false));
 
   useEffect(() => {
     if (state.loaded) load();
@@ -55,7 +62,7 @@ export default function DataProfiling() {
     <>
       <PageHeader
         title="Data Profiling"
-        subtitle="Profile your dataset, generate AI rules, and detect drift."
+        subtitle="Data quality assessment across six dimensions — completeness, validation, uniqueness, standardisation, accuracy, timeliness."
         actions={
           <Button variant="contained" startIcon={<PlayArrowIcon />} onClick={runProfile} disabled={busy}>
             {busy ? 'Profiling…' : profiled ? 'Re-run Profile' : 'Run Profile'}
@@ -73,22 +80,16 @@ export default function DataProfiling() {
 
       {profiled && (
         <>
-          <KpiBar kpi={kpi} />
+          <KpiBar kpi={kpi} executiveSummary={executiveSummary} />
           <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
             <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto">
-              <Tab label="Overview" />
-              <Tab label="Data Glossary" />
-              <Tab label="Data Drift" />
-              <Tab label="Match Rules" />
+              <Tab label="Executive Summary" />
               <Tab label="Export" />
             </Tabs>
           </Box>
           <Box sx={{ pt: 2 }}>
-            {tab === 0 && <OverviewTab />}
-            {tab === 1 && <AiRulesTab />}
-            {tab === 2 && <DriftTab />}
-            {tab === 3 && <MatchRulesTab />}
-            {tab === 4 && <ExportTab />}
+            {tab === 0 && <ExecutiveSummaryTab />}
+            {tab === 1 && <ExportTab />}
           </Box>
         </>
       )}

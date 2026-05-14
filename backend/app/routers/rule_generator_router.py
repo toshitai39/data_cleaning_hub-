@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -50,6 +51,7 @@ from ..services.dq_rg_mapping import rg_row_to_applied_rule
 from ..services.dq_engine import default_config as _dq_default_config
 from ..services.project_storage import save_dq_config, save_rules
 from ..services.cross_field_engine import _run_llm_expression
+from ..services.stream_context import build_project_context
 from ..services.rule_generator import (
     evaluate_cross_field_rules_in_df,
     generate_complete,
@@ -154,11 +156,27 @@ def generate(
     def cb(payload: Dict[str, Any]) -> None:
         progress_log.append(payload)
 
+    # Resolve master-data context so the LLM prompts adapt to the stream
+    # type (entity master vs joined view). Works for any source system —
+    # SAP, Oracle, Workday, Snowflake, or file upload — keyed on stream_id.
+    active_project = None
+    if sess.active_project_id and sess.user and sess.user.get("username"):
+        active_project = (
+            db.query(Project)
+            .filter(
+                Project.id == sess.active_project_id,
+                Project.user_username == sess.user["username"],
+            )
+            .one_or_none()
+        )
+    project_context = build_project_context(active_project)
+
     try:
         df_rules = generate_complete(
             file_path, sheet_name, header_row, df_in_scope,
             progress_cb=cb,
             semantic_glossary=sess.semantic_glossary,
+            project_context=project_context,
         )
     except Exception as exc:
         logger.error("Rule generation failed: %s", exc, exc_info=True)
@@ -287,10 +305,144 @@ def export_pdf(sess: SessionData = Depends(require_dataframe)):
 class CustomRuleBody(BaseModel):
     column: Optional[str] = None
     columns: Optional[List[str]] = None
+    # AND / OR — meaningful for Validation, Completeness, Uniqueness multi-CDE
+    # rules. Ignored elsewhere. Defaults to AND server-side when omitted.
+    operator: Optional[str] = None
     dimension: str
     data_quality_rule: str
     regex_pattern: Optional[str] = ""
     validation_expression: Optional[str] = ""
+
+
+# Per-dimension capability map — mirror of frontend DIM_CAPS.
+# - multi: dimension can target N CDEs in a single rule
+# - operator: AND/OR is meaningful (vs ignored / not applicable)
+_DIM_CAPS = {
+    "Validation":             {"multi": True,  "operator": True},
+    "Completeness":           {"multi": True,  "operator": True},
+    "Uniqueness":             {"multi": True,  "operator": True},
+    "Standardisation":        {"multi": False, "operator": False},
+    "Accuracy":               {"multi": False, "operator": False},
+    "Timeliness":             {"multi": False, "operator": False},
+    "Cross-field Validation": {"multi": True,  "operator": False},
+    # Legacy aliases — accept rules persisted before the rename.
+    "Validity":               {"multi": True,  "operator": True},
+    "Consistency":            {"multi": False, "operator": False},
+}
+
+
+def _evaluate_multi_custom_rule(
+    df: pd.DataFrame,
+    columns: List[str],
+    dimension: str,
+    operator: str,
+    regex_pattern: str,
+) -> tuple[int, str]:
+    """Compute (issues_found, example) for a multi-CDE custom rule.
+
+    Semantics are dimension-aware per the steward's choice on the dialog:
+
+      Uniqueness + AND  → composite-key uniqueness (tuple over the CDEs).
+                          Issues = rows whose tuple is duplicated.
+      Uniqueness + OR   → each CDE independently unique. Issues = rows that
+                          fail uniqueness on ANY one of the CDEs.
+
+      Completeness + AND → all CDEs non-null per row. Issues = rows with
+                           any null in the selected CDEs.
+      Completeness + OR  → at least one non-null per row. Issues = rows
+                           where every selected CDE is null.
+
+      Validation + AND  → every CDE matches the regex on every row.
+                          Issues = rows where any selected CDE fails.
+      Validation + OR   → at least one CDE matches per row. Issues =
+                          rows where none of the selected CDEs match.
+                          (Validation without a regex is treated as a
+                          placeholder; we report 0 issues + a hint so
+                          stewards see the rule landed but isn't scored.)
+    """
+    n_rows = len(df)
+    if n_rows == 0 or not columns:
+        return 0, "No rows to evaluate"
+    op = (operator or "AND").upper()
+    if op not in ("AND", "OR"):
+        op = "AND"
+
+    # --- Uniqueness ----------------------------------------------------
+    if dimension == "Uniqueness":
+        if op == "AND":
+            sub = df[columns]
+            # NaN-aware: rows whose tuple is duplicated.
+            dup_mask = sub.duplicated(keep=False)
+            bad = int(dup_mask.sum())
+            example = "All composite keys unique" if bad == 0 else (
+                f"{bad} rows share their ({' + '.join(columns)}) tuple with another row"
+            )
+            return bad, example
+        # OR — fail if ANY CDE independently has a duplicate.
+        any_bad = pd.Series(False, index=df.index)
+        per_col_bad: Dict[str, int] = {}
+        for c in columns:
+            col_dup = df[c].dropna()
+            if col_dup.empty:
+                per_col_bad[c] = 0
+                continue
+            bad_mask = df[c].duplicated(keep=False) & df[c].notna()
+            per_col_bad[c] = int(bad_mask.sum())
+            any_bad = any_bad | bad_mask
+        bad = int(any_bad.sum())
+        if bad == 0:
+            return 0, "Every selected CDE is independently unique"
+        worst = max(per_col_bad.items(), key=lambda kv: kv[1])
+        return bad, f"{bad} rows fail uniqueness (worst CDE: {worst[0]} → {worst[1]} dup rows)"
+
+    # --- Completeness --------------------------------------------------
+    if dimension == "Completeness":
+        sub_null = df[columns].isna()
+        if op == "AND":
+            bad_mask = sub_null.any(axis=1)
+            bad = int(bad_mask.sum())
+            example = "All selected CDEs filled on every row" if bad == 0 else (
+                f"{bad} rows missing at least one of: {', '.join(columns)}"
+            )
+            return bad, example
+        # OR — fail only when EVERY selected CDE is null on that row.
+        bad_mask = sub_null.all(axis=1)
+        bad = int(bad_mask.sum())
+        example = "At least one selected CDE filled on every row" if bad == 0 else (
+            f"{bad} rows where all of ({' or '.join(columns)}) are blank"
+        )
+        return bad, example
+
+    # --- Validation (regex-based) -------------------------------------
+    if dimension in ("Validation", "Validity"):
+        pat = (regex_pattern or "").strip()
+        if not pat:
+            return 0, "Validation rule saved — supply a regex pattern to score it"
+        try:
+            re.compile(pat)
+        except re.error as exc:
+            return 0, f"Invalid regex pattern: {exc}"
+        # Per-cell match. NaN counts as non-match (a blank can't satisfy a regex).
+        match_frame = pd.DataFrame({
+            c: df[c].astype(str).where(df[c].notna(), "").str.match(pat, na=False)
+            for c in columns
+        })
+        if op == "AND":
+            bad_mask = ~match_frame.all(axis=1)
+            bad = int(bad_mask.sum())
+            example = "All selected CDEs match the pattern on every row" if bad == 0 else (
+                f"{bad} rows where at least one of ({', '.join(columns)}) fails the pattern"
+            )
+            return bad, example
+        # OR — pass if ANY CDE matches per row; fail only when all fail.
+        bad_mask = ~match_frame.any(axis=1)
+        bad = int(bad_mask.sum())
+        example = "At least one selected CDE matches on every row" if bad == 0 else (
+            f"{bad} rows where none of ({', '.join(columns)}) match the pattern"
+        )
+        return bad, example
+
+    return 0, "Rule saved — no automatic evaluation for this dimension"
 
 
 def _renumber(df: pd.DataFrame) -> pd.DataFrame:
@@ -321,33 +473,74 @@ def add_custom_rule(
 
     df_data = sess.df
     all_columns = {str(c) for c in df_data.columns}
+    caps = _DIM_CAPS.get(dimension, {"multi": False, "operator": False})
 
     is_cross_field = dimension == "Cross-field Validation"
-    if is_cross_field:
-        cols = list(body.columns or [])
+
+    # Decide single vs multi mode. A multi-capable dimension uses `columns`
+    # when provided (any length ≥ 1); otherwise we fall back to the single
+    # `column` field for backwards compatibility with old callers.
+    multi_mode = False
+    cols: List[str] = []
+    single_col = ""
+    operator = (body.operator or "AND").strip().upper()
+    if operator not in ("AND", "OR"):
+        operator = "AND"
+
+    if caps["multi"] and (body.columns or is_cross_field):
+        cols = [str(c).strip() for c in (body.columns or []) if str(c).strip()]
         if not cols and body.column:
             # Allow "a + b + c" or "a, b, c" syntax in the single field
             parts = [p.strip() for p in body.column.replace(",", "+").split("+") if p.strip()]
             cols = parts
-        if len(cols) < 2:
-            raise HTTPException(
-                status_code=400,
-                detail="Cross-field rules must reference at least 2 columns",
-            )
+        if is_cross_field:
+            if len(cols) < 2:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cross-field rules must reference at least 2 critical data elements",
+                )
+        else:
+            if not cols:
+                raise HTTPException(
+                    status_code=400,
+                    detail="At least one critical data element is required",
+                )
         unknown = [c for c in cols if c not in all_columns]
         if unknown:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unknown columns: {', '.join(unknown)}",
+                detail=f"Unknown critical data element(s): {', '.join(unknown)}",
             )
-        column_label = " + ".join(cols)
+        # Single-CDE on a multi-capable dimension — fall through to the
+        # single-column path so operator is ignored and downstream
+        # evaluation uses the regular validate_all_rules pipeline.
+        if not is_cross_field and len(cols) == 1:
+            multi_mode = False
+            single_col = cols[0]
+            cols = []
+        else:
+            multi_mode = True
     else:
         col = (body.column or "").strip()
         if not col:
-            raise HTTPException(status_code=400, detail="Column is required for non-cross-field rules")
+            raise HTTPException(status_code=400, detail="Critical data element is required")
         if col not in all_columns:
-            raise HTTPException(status_code=400, detail=f"Unknown column: {col}")
-        column_label = col
+            raise HTTPException(status_code=400, detail=f"Unknown critical data element: {col}")
+        single_col = col
+
+    # Column label is what shows in the rule table. For multi-CDE we
+    # join with the operator so stewards see "name AND pan" or
+    # "email OR phone" at a glance; cross-field keeps its plus-joined
+    # convention (the resolver doesn't see an explicit operator).
+    if multi_mode:
+        if is_cross_field:
+            column_label = " + ".join(cols)
+        elif caps["operator"]:
+            column_label = f" {operator} ".join(cols)
+        else:
+            column_label = " + ".join(cols)
+    else:
+        column_label = single_col
 
     new_row = {
         "S.No": 0,  # filled by _renumber below
@@ -360,24 +553,35 @@ def add_custom_rule(
         "Issues Found": 0,
         "Issues Found Example": "Pending validation",
         "Validation Expression": (body.validation_expression or "").strip(),
+        # New: persist operator + atomic columns so downstream tools (and
+        # future re-evaluations) don't have to re-parse the composite label.
+        "Operator": operator if (multi_mode and caps["operator"]) else "",
+        "Columns": ",".join(cols) if multi_mode else "",
     }
 
     existing = sess.ai_validation_rules
     if existing is None or (isinstance(existing, pd.DataFrame) and existing.empty):
         df_rules = pd.DataFrame([new_row])
     else:
+        # Ensure newly added columns exist on the existing frame before concat.
+        for new_col in ("Operator", "Columns"):
+            if new_col not in existing.columns:
+                existing = existing.copy()
+                existing[new_col] = ""
         df_rules = pd.concat([existing, pd.DataFrame([new_row])], ignore_index=True)
 
-    # Evaluate the newly appended rule. For non-cross-field, validate_all_rules
-    # re-runs every row (cheap); for cross-field with a user-supplied
-    # validation_expression we evaluate it directly through the AST sandbox.
+    last_idx = df_rules.index[-1]
+
+    # Evaluation routing:
+    #   Cross-field   → existing engine path (expression sandbox or family resolver).
+    #   Multi-CDE     → new dimension-aware evaluator (AND/OR semantics).
+    #   Single-CDE    → unchanged validate_all_rules pipeline.
     if is_cross_field and new_row["Validation Expression"]:
         result = _run_llm_expression(
             {"code": new_row["Validation Expression"], "description": rule_text},
             df_data,
             cols,
         )
-        last_idx = df_rules.index[-1]
         if result is None:
             df_rules.at[last_idx, "Issues Found"] = 0
             df_rules.at[last_idx, "Issues Found Example"] = (
@@ -386,11 +590,20 @@ def add_custom_rule(
         else:
             df_rules.at[last_idx, "Issues Found"] = int(result.count)
             df_rules.at[last_idx, "Issues Found Example"] = result.example
+    elif is_cross_field:
+        df_rules = evaluate_cross_field_rules_in_df(df_rules, df_data)
+    elif multi_mode:
+        try:
+            issues, example = _evaluate_multi_custom_rule(
+                df_data, cols, dimension, operator, new_row["Regex Pattern"],
+            )
+        except Exception as exc:
+            logger.warning("Multi-CDE custom rule eval failed: %s", exc, exc_info=True)
+            issues, example = 0, f"Could not evaluate rule: {exc}"
+        df_rules.at[last_idx, "Issues Found"] = int(issues)
+        df_rules.at[last_idx, "Issues Found Example"] = example
     else:
-        if is_cross_field:
-            df_rules = evaluate_cross_field_rules_in_df(df_rules, df_data)
-        else:
-            df_rules = validate_all_rules(df_data, df_rules)
+        df_rules = validate_all_rules(df_data, df_rules)
 
     df_rules = enrich_dataframe_regex_patterns(df_rules)
     df_rules = _renumber(df_rules)

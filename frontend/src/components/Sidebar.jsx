@@ -24,13 +24,16 @@ export const STAGES = [
     section: 'DATA INPUT',
     steps: [
       { key: 'load', label: 'Load data', icon: UploadFileOutlinedIcon },
-      { key: 'dashboard', label: 'Dashboard', icon: DashboardOutlinedIcon },
     ],
   },
   {
     section: 'PROFILE',
     steps: [
       { key: 'profile', label: 'Data profiling', icon: InsightsOutlinedIcon },
+      // Dashboard sits AFTER profiling — it's a consumer of the
+      // assessment, so navigating to it before scores exist makes no
+      // sense. The new order matches the steward's actual workflow.
+      { key: 'dashboard', label: 'Dashboard', icon: DashboardOutlinedIcon },
     ],
   },
   {

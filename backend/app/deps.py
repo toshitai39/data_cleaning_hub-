@@ -17,8 +17,54 @@ def get_session(x_session_id: Optional[str] = Header(default=None)) -> SessionDa
     return store.get(sid)
 
 
+def _restore_dataframe_from_disk(sess: SessionData) -> bool:
+    """Lazy-load the project's working.parquet back into the session.
+
+    The in-memory ``SessionData`` is wiped whenever uvicorn hot-reloads,
+    the worker recycles, or the user picks the project up from a brand
+    new browser tab. The on-disk parquet is the durable source of truth
+    — this helper reads it back into ``sess.df`` so downstream endpoints
+    don't have to deal with "session lost ⇒ no dataset" cascades.
+
+    Returns True when a dataframe was restored, False otherwise.
+    """
+    if sess.df is not None or not sess.active_project_id:
+        return False
+    # Imported lazily to avoid a circular dependency between deps.py and
+    # the storage layer at import time.
+    from .services.project_storage import load_working
+    try:
+        working, original = load_working(sess.active_project_id)
+    except Exception:
+        return False
+    if working is None or working.empty:
+        return False
+    sess.df = working
+    if original is not None and getattr(sess, "df_original", None) is None:
+        sess.df_original = original
+    # Re-hydrate scope from disk so downstream endpoints see the saved
+    # critical-data-element selection rather than an empty list.
+    if not sess.columns_of_interest:
+        try:
+            from .services.project_storage import load_scope
+            saved_scope = load_scope(sess.active_project_id)
+            if saved_scope:
+                sess.columns_of_interest = [
+                    c for c in saved_scope if c in working.columns
+                ]
+        except Exception:
+            pass
+    return True
+
+
 def require_dataframe(x_session_id: Optional[str] = Header(default=None)) -> SessionData:
     sess = get_session(x_session_id)
+    if sess.df is None:
+        # First try: rehydrate from the on-disk working parquet. Covers
+        # backend hot-reloads, worker recycles, fresh tabs on existing
+        # projects — anything that wiped the in-memory state but left
+        # the project intact on disk.
+        _restore_dataframe_from_disk(sess)
     if sess.df is None:
         raise HTTPException(status_code=400, detail="No dataset loaded. Upload a file first.")
     return sess

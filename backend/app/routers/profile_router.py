@@ -57,7 +57,18 @@ from ..services.match_rules import (
 from ..services.dashboard import collect_risk_counts, collect_top_issues
 from ..services.profile_export import build_excel_report, build_json_report
 from ..services.project_storage import save_glossary
+from ..services.accuracy_report import compute_accuracy_report
+from ..services.cde_recommender import column_set_fingerprint as _cde_fingerprint
+from ..services.completeness_report import compute_completeness_report
+from ..services.dama_assessment import compute_executive_summary
+from ..services.project_storage import load_cde_meta as _load_cde_meta
+from ..services.quality_dashboard import compute_quality_dashboard
 from ..services.semantic_glossary import generate_semantic_glossary
+from ..services.standardisation_report import compute_standardisation_report
+from ..services.stream_context import build_project_context
+from ..services.timeliness_report import compute_timeliness_report
+from ..services.uniqueness_report import compute_uniqueness_report
+from ..services.validation_report import compute_validation_report
 from ..session_store import SessionData
 
 router = APIRouter(prefix="/profile", tags=["profile"])
@@ -247,6 +258,273 @@ def kpi(sess: SessionData = Depends(require_dataframe)) -> dict:
         "missing_cells": missing_cells,
         "fill_rate_pct": round(float(fill_rate), 2) if fill_rate is not None else None,
     }
+
+
+# ---------- DAMA Executive Summary --------------------------------------
+
+def _resolve_glossary(sess: SessionData, df: pd.DataFrame) -> Optional[Dict[str, Any]]:
+    """Find the best available AI-generated column classification.
+
+    Priority order — entirely AI-driven, no column-name keyword fallback:
+      1. ``cde_meta`` cached per project by ``cde_recommender.generate_cde_meta``
+         (canonical: description, semantic_type, recommended).
+      2. The older ``semantic_glossary`` from the Data Glossary tab, if the
+         user generated it before opening Data Profiling.
+
+    Returns ``None`` when neither exists — downstream scorers degrade to
+    their disabled state and the UI nudges the user to run the CDE picker.
+
+    **Important fingerprint detail**: the CDE recommender writes its cache
+    keyed on the full dataset's column set (``sess.df.columns``), not on
+    whatever subset the steward later picks for analytical scope. Computing
+    the fingerprint from the scoped frame here would produce a fingerprint
+    mismatch every time the scope narrows, falsely invalidating a perfectly
+    good classification. So we always fingerprint against the full schema.
+    """
+    if sess.active_project_id:
+        # Fingerprint by the FULL dataset columns to match how the recommender
+        # writes the cache — narrowing scope on Load Data shouldn't invalidate
+        # the AI's per-column classification, only filter which rows we score.
+        full_cols = (
+            [str(c) for c in sess.df.columns]
+            if sess.df is not None else [str(c) for c in df.columns]
+        )
+        cached = _load_cde_meta(sess.active_project_id, _cde_fingerprint(full_cols))
+        if cached:
+            return cached
+    sg = getattr(sess, "semantic_glossary", None)
+    if isinstance(sg, dict):
+        return sg
+    if isinstance(sg, list):
+        return {
+            (e.get("column") or e.get("name") or ""): e
+            for e in sg
+            if isinstance(e, dict)
+        }
+    return None
+
+
+def _resolve_project_context(sess: SessionData, db: Session) -> Dict[str, Any]:
+    """Compact master-data context for the current session's project.
+
+    Includes ``system_id``, ``stream_id``, and the behavioural flags
+    (``identifier_repeats_expected``, ``is_entity_master``) that
+    downstream scorers and the rule generator key off of.
+    """
+    project = None
+    if sess.active_project_id and sess.user and sess.user.get("username"):
+        project = (
+            db.query(Project)
+            .filter(
+                Project.id == sess.active_project_id,
+                Project.user_username == sess.user["username"],
+            )
+            .one_or_none()
+        )
+    return build_project_context(project)
+
+
+def _resolve_cross_field_rules(sess: SessionData, df: pd.DataFrame) -> List[Dict[str, Any]]:
+    """Cross-field rule violations seeded from generated AI rules.
+
+    Reads rules whose Dimension contains "cross"; their ``Issues Found``
+    counts feed the Accuracy scorer.
+    """
+    out: List[Dict[str, Any]] = []
+    ai_rules = getattr(sess, "ai_validation_rules", None)
+    if isinstance(ai_rules, pd.DataFrame) and not ai_rules.empty:
+        cf = ai_rules[ai_rules.get("Dimension", "").astype(str).str.lower().str.contains("cross", na=False)]
+        for _, row in cf.iterrows():
+            out.append({
+                "rule": row.get("Data Quality Rule") or row.get("Rule") or "",
+                "issues_found": int(row.get("Issues Found", 0) or 0),
+                "rows_evaluated": int(len(df) or 1),
+            })
+    return out
+
+
+@router.get("/executive-summary")
+def executive_summary(
+    sess: SessionData = Depends(require_dataframe),
+    db: Session = Depends(get_db),
+) -> dict:
+    """DAMA-aligned scorecard: 6 dimensions + key stats + remediation actions.
+
+    Designed for the first tab of Data Profiling — a 30-second read of
+    where the data is sick. The scorer is fully AI-driven: per-column
+    classification flows from ``cde_meta`` produced by the CDE picker,
+    and master-data semantics (e.g. "identifier repetition is expected
+    for material masters") flow from the project's stream.
+    """
+    df = scoped_dataframe(sess)
+    glossary = _resolve_glossary(sess, df)
+    project_context = _resolve_project_context(sess, db)
+    cross_field_rules = _resolve_cross_field_rules(sess, df)
+    return compute_executive_summary(
+        df,
+        glossary=glossary,
+        cross_field_rules=cross_field_rules,
+        project_context=project_context,
+    )
+
+
+@router.get("/completeness")
+def completeness(
+    sess: SessionData = Depends(require_dataframe),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Per-field fill-rate analysis (DAMA Completeness, reference Sheet 1).
+
+    Returns bucket summary + a sortable per-field table. Each field is
+    tagged with its AI-assigned ``semantic_type`` and CDE flag so the
+    picker UI can let stewards filter to "blanks on CDEs only".
+    """
+    df = scoped_dataframe(sess)
+    glossary = _resolve_glossary(sess, df)
+    project_context = _resolve_project_context(sess, db)
+    return compute_completeness_report(df, glossary=glossary, project_context=project_context)
+
+
+@router.get("/validation")
+def validation(
+    sess: SessionData = Depends(require_dataframe),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Per-attribute format Validation report (DAMA Validation, ref Sheet 2).
+
+    For every column the AI tagged with a known semantic_type (PAN /
+    GSTIN / Email / postal / ISO country / etc.), runs the canonical
+    regex against the actual values and returns valid / invalid / blank
+    counts plus up to 10 sample invalid rows.
+    """
+    df = scoped_dataframe(sess)
+    glossary = _resolve_glossary(sess, df)
+    project_context = _resolve_project_context(sess, db)
+    result = compute_validation_report(df, glossary=glossary, project_context=project_context)
+    result["needs_classification"] = glossary is None
+    return result
+
+
+@router.get("/uniqueness")
+def uniqueness(
+    sess: SessionData = Depends(require_dataframe),
+    db: Session = Depends(get_db),
+) -> dict:
+    """DAMA Uniqueness deep-dive (ref Sheet 3).
+
+    Returns four sections: record overview, composite-key duplicates,
+    shared-identifier risk (same PAN / GSTIN across multiple entity
+    rows), and per-column uniqueness rollup. Severity language adapts
+    to master-data stream — repetition is informational for Material /
+    GL / Cost Centre joined views, high-risk for Customer / Vendor /
+    Employee entity masters.
+    """
+    df = scoped_dataframe(sess)
+    glossary = _resolve_glossary(sess, df)
+    project_context = _resolve_project_context(sess, db)
+    result = compute_uniqueness_report(df, glossary=glossary, project_context=project_context)
+    # Signal to the frontend that the AI hasn't classified columns yet —
+    # tells the drill-down to auto-trigger regeneration before giving up.
+    result["needs_classification"] = glossary is None
+    return result
+
+
+@router.get("/standardisation")
+def standardisation(
+    sess: SessionData = Depends(require_dataframe),
+    db: Session = Depends(get_db),
+) -> dict:
+    """DAMA Standardisation deep-dive (ref Sheet 4).
+
+    Case-pattern analysis per text column, fuzzy spelling-variant
+    clusters within a column, and whitespace / control-character
+    issues. Identifier-typed columns are excluded (their format is
+    Validation's territory).
+    """
+    df = scoped_dataframe(sess)
+    glossary = _resolve_glossary(sess, df)
+    project_context = _resolve_project_context(sess, db)
+    return compute_standardisation_report(df, glossary=glossary, project_context=project_context)
+
+
+@router.get("/accuracy")
+def accuracy(
+    sess: SessionData = Depends(require_dataframe),
+    db: Session = Depends(get_db),
+) -> dict:
+    """DAMA Accuracy deep-dive (ref Sheet 5).
+
+    Per-rule pass / fail rollup of generated cross-field rules, with
+    sample failing examples and the underlying validation expression.
+    Returns ``needs_rules: true`` when no cross-field rules exist —
+    the frontend uses that to render a one-click "Run Rule Generator"
+    CTA instead of an empty table.
+    """
+    df = scoped_dataframe(sess)
+    glossary = _resolve_glossary(sess, df)
+    project_context = _resolve_project_context(sess, db)
+    return compute_accuracy_report(
+        df,
+        ai_validation_rules=getattr(sess, "ai_validation_rules", None),
+        glossary=glossary,
+        project_context=project_context,
+    )
+
+
+@router.get("/quality-dashboard")
+def quality_dashboard(
+    sess: SessionData = Depends(require_dataframe),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Consolidated payload for the Data Quality Dashboard page.
+
+    Returns KPI counts, the six dimension scores, threshold-category
+    distribution, semantic-type distribution, per-dimension rule counts,
+    and the per-field score table — everything the dashboard renders in
+    one round-trip. All numbers flow from the existing scorers + cached
+    AI classification, so the dashboard never disagrees with the
+    profiling pages.
+    """
+    df = scoped_dataframe(sess)
+    glossary = _resolve_glossary(sess, df)
+    project_context = _resolve_project_context(sess, db)
+    cross_field_rules = _resolve_cross_field_rules(sess, df)
+    exec_summary = compute_executive_summary(
+        df, glossary=glossary,
+        cross_field_rules=cross_field_rules,
+        project_context=project_context,
+    )
+    # Pull the generated rules dataframe so dashboard rule counts match
+    # what the Rule Generator page shows (e.g. 108 of 108 rules) rather
+    # than being approximated from "fields where a dimension applies".
+    ai_rules_df = getattr(sess, "ai_validation_rules", None)
+    return compute_quality_dashboard(
+        df,
+        glossary=glossary,
+        executive_summary=exec_summary,
+        cross_field_rules=cross_field_rules,
+        project_context=project_context,
+        ai_rules_df=ai_rules_df,
+    )
+
+
+@router.get("/timeliness")
+def timeliness(
+    sess: SessionData = Depends(require_dataframe),
+    db: Session = Depends(get_db),
+) -> dict:
+    """DAMA Timeliness deep-dive.
+
+    Per-datetime-column analysis: populated / blank counts, oldest /
+    newest values, future-dated and very-old rows with samples, and
+    a per-column timeliness rate. Empty when the dataset has no
+    datetime columns — Timeliness is the only dimension that can
+    legitimately be N/A.
+    """
+    df = scoped_dataframe(sess)
+    glossary = _resolve_glossary(sess, df)
+    project_context = _resolve_project_context(sess, db)
+    return compute_timeliness_report(df, glossary=glossary, project_context=project_context)
 
 
 # ---------- Overview chart data -----------------------------------------

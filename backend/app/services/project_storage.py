@@ -209,7 +209,18 @@ def load_cde_meta(
     project_id: str,
     expected_fingerprint: str,
 ) -> Optional[Dict[str, Dict[str, Any]]]:
-    """Return cached CDE meta IFF its fingerprint matches the current dataset."""
+    """Return cached CDE meta IFF the cache is current AND schema-complete.
+
+    Three reasons we return None:
+      1. File missing.
+      2. Fingerprint mismatch — columns differ from what was classified.
+      3. Schema-stale — cached entries pre-date the ``semantic_type`` field
+         (i.e. generated under the older prompt that only emitted
+         description + recommended). Without semantic_type the Validation
+         and Uniqueness scorers can't detect identifiers, so the cache is
+         effectively unusable for downstream features. Treating as miss
+         triggers a one-time regeneration that lights up every dimension.
+    """
     p = cde_meta_path(project_id)
     if not p.exists():
         return None
@@ -223,7 +234,19 @@ def load_cde_meta(
     if payload.get("fingerprint") != expected_fingerprint:
         return None
     meta = payload.get("meta")
-    return meta if isinstance(meta, dict) else None
+    if not isinstance(meta, dict) or not meta:
+        return None
+    # Schema-stale check: any entry must carry the semantic_type key.
+    # Even a value of 'other' counts — it means the column WAS classified
+    # under the new schema. What we're rejecting is caches where the field
+    # simply doesn't exist on any entry.
+    if not any("semantic_type" in (v or {}) for v in meta.values()):
+        logger.info(
+            "load_cde_meta(%s): cache exists but lacks semantic_type — treating as miss so a fresh classification runs.",
+            project_id,
+        )
+        return None
+    return meta
 
 
 def dq_config_path(project_id: str) -> Path:

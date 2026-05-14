@@ -169,6 +169,52 @@ def evaluate_cross_field_rules_in_df(
     return out
 
 
+def _build_context_preamble(project_context: Optional[Dict[str, Any]]) -> str:
+    """Master-data context paragraph prepended to every rule-generation prompt.
+
+    Tells the model whether the dataset is an entity master (identifier
+    must be globally unique — e.g. Customer / Vendor / Employee) or a
+    joined / denormalised view (identifier repetition is expected — e.g.
+    Material × plant, GL × company code). Without this, the LLM defaults
+    to "every ID-shaped column needs a Uniqueness rule", which produces
+    false-positive rules on transactional master views.
+
+    Works for any source system (SAP, Oracle, Workday, Snowflake, file
+    upload) because it keys on ``stream_id``, not ``system_id``.
+    """
+    if not project_context:
+        return ""
+    system_label = project_context.get("system_label") or "an unspecified source system"
+    stream_label = project_context.get("stream_label") or "an unspecified master-data stream"
+    if project_context.get("identifier_repeats_expected"):
+        uniqueness_note = (
+            "Identifier columns are expected to REPEAT across rows in this dataset because "
+            "it is a joined / denormalised master-data view. Generate Uniqueness rules on the "
+            "COMPOSITE KEY (the primary identifier PLUS the column that drives the join — "
+            "e.g. plant, company code, language, controlling area), NOT on the identifier "
+            "alone. Do NOT propose a rule that says the primary identifier must be unique."
+        )
+    elif project_context.get("is_entity_master"):
+        uniqueness_note = (
+            "The primary identifier MUST be globally unique in this dataset (it is a "
+            "canonical entity master — one row per business entity). Generate a Uniqueness "
+            "rule on the primary identifier directly. Composite keys are not required."
+        )
+    else:
+        uniqueness_note = (
+            "Uniqueness expectations are not pre-declared. Infer them from the data shape: "
+            "if a column's values are 100% unique in the samples, propose a Uniqueness rule; "
+            "otherwise be conservative."
+        )
+    return (
+        "MASTER-DATA CONTEXT\n"
+        "===================\n"
+        f"Source system: {system_label}\n"
+        f"Master-data stream: {stream_label}\n"
+        f"Uniqueness expectation: {uniqueness_note}\n\n"
+    )
+
+
 def generate_rules_with_comprehensive_engine(
     file_path: Optional[str],
     sheet_name: Optional[str],
@@ -176,6 +222,7 @@ def generate_rules_with_comprehensive_engine(
     df: pd.DataFrame,
     progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
     semantic_glossary: Optional[Dict[str, Dict[str, Any]]] = None,
+    project_context: Optional[Dict[str, Any]] = None,
 ) -> pd.DataFrame:
     """Verbatim port of features/rule_generator/ui.py:_generate_rules_with_comprehensive_engine.
 
@@ -190,6 +237,13 @@ def generate_rules_with_comprehensive_engine(
         azure_endpoint=AzureOpenAIConfig.AZURE_OPENAI_ENDPOINT,
         api_key=AzureOpenAIConfig.AZURE_OPENAI_KEY,
     )
+
+    # Master-data context paragraph. Built once, prepended to every
+    # subsequent prompt so the model knows whether the dataset is an
+    # entity master (uniqueness on the identifier) or a joined master
+    # view (uniqueness on a composite key). Empty string if no context
+    # was supplied — preserves the legacy prompt verbatim.
+    _context_preamble = _build_context_preamble(project_context)
 
     # Step 1: Deep scan Excel sheet (only if Excel file)
     column_rules: Dict[str, str] = {}
@@ -284,6 +338,9 @@ def generate_rules_with_comprehensive_engine(
             metadata=metadata,
             rule_source=rule_source,
         )
+        # Master-data context lives in front of every per-column prompt so
+        # the model adjusts its rules (esp. Uniqueness) to the stream type.
+        prompt = _context_preamble + prompt
         try:
             result = _llm_json(prompt)
             rules = post_process_rules(result.get("rules", []), metadata) if "rules" in result else []
@@ -309,7 +366,7 @@ def generate_rules_with_comprehensive_engine(
     valid_column_set = set(all_column_names)
 
     def _run_cross_field_table() -> List[Dict[str, Any]]:
-        prompt = generate_cross_field_prompt(column_samples=column_samples)
+        prompt = _context_preamble + generate_cross_field_prompt(column_samples=column_samples)
         try:
             result = _llm_json(prompt)
             raw_rules = result.get("rules", []) if isinstance(result, dict) else []
@@ -424,10 +481,13 @@ def generate_complete(
     df: pd.DataFrame,
     progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
     semantic_glossary: Optional[Dict[str, Dict[str, Any]]] = None,
+    project_context: Optional[Dict[str, Any]] = None,
 ) -> pd.DataFrame:
     """Full end-to-end pipeline:
     1. generate rules via the per-column + cross-field passes (semantic
-       glossary entries are folded into each column's prompt when supplied)
+       glossary entries are folded into each column's prompt when supplied;
+       master-data context is prepended so the model adapts uniqueness
+       rules to the stream type — entity master vs joined view)
     2. validate single-column rules against actual data
     3. evaluate cross-field rules through the executor (with LLM fallback
        for shapes the family parsers don't cover)
@@ -436,6 +496,7 @@ def generate_complete(
     df_rules = generate_rules_with_comprehensive_engine(
         file_path, sheet_name, header_row, df, progress_cb,
         semantic_glossary=semantic_glossary,
+        project_context=project_context,
     )
     df_rules = validate_all_rules(df, df_rules)
     df_rules = evaluate_cross_field_rules_in_df(df_rules, df)
