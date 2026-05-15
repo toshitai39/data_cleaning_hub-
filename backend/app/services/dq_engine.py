@@ -18,6 +18,31 @@ import pandas as pd
 from ..session_store import SessionData
 
 
+def _stringify(series: pd.Series) -> pd.Series:
+    """Convert a Series to clean string form for regex matching.
+
+    Why: pandas coerces integer columns containing NaNs to float64, so a
+    column like ``year_of_establishment`` (2017, 2018, ...) becomes
+    ``2017.0, 2018.0, ...`` and ``.astype(str)`` yields "2017.0", which
+    the AI year-validity regex (``^(19\\d{2}|20\\d{2})$``) never matches.
+    For float-typed columns we strip the trailing ``.0`` on whole-number
+    floats so the regex behaves like a human would expect.
+    """
+    if pd.api.types.is_float_dtype(series):
+        def _conv(v):
+            if pd.isna(v):
+                return ""
+            try:
+                f = float(v)
+                if f.is_integer():
+                    return str(int(f))
+                return str(v)
+            except (TypeError, ValueError):
+                return str(v)
+        return series.map(_conv)
+    return series.astype(str)
+
+
 def default_config() -> Dict[str, Any]:
     return {
         "enabled": False,
@@ -81,6 +106,135 @@ def generate_rule_name(config: Dict[str, Any]) -> str:
     return f"{mode} Rule"
 
 
+def get_preview_failing(
+    df: pd.DataFrame,
+    column: str,
+    config: Dict[str, Any],
+    limit: int = 20,
+) -> Optional[Dict[str, Any]]:
+    """Preview rows that the rule would REJECT, with the full row context.
+
+    Used by the per-row Preview button on the Cleansing tab: stewards need
+    to see the whole record (vendor_name, country, etc.) — not just the
+    isolated cell — to judge whether the rule is right. We also return
+    only failing rows, since seeing 9 valid rows + 1 reject buries the
+    signal.
+
+    Returns ``{"column", "rows", "total_failing", "after_examples"}`` where
+    each row dict is the full original row PLUS ``_before``, ``_after``,
+    ``_status`` for the target column. Returns ``None`` on error.
+    """
+    try:
+        mode = config["mode"]
+        pattern = config.get("pattern", "")
+        replace = config.get("replace", "")
+        case = config.get("case", "UPPERCASE")
+
+        # Build a failing-row mask that EXACTLY MIRRORS apply_column_rules.
+        # The engine's apply path runs str.match / str.findall / str.len on
+        # _stringify(col) — which turns NaN into "" — and rejects any row
+        # the regex doesn't accept. That means null/blank rows ARE rejected
+        # by a Completeness regex (^(?=.*\S).*$). Preview must show the
+        # same set, otherwise the steward sees "0 failing" then watches
+        # Apply reject N rows — exactly the bug just reported.
+        col_series = _stringify(df[column])
+        failing_mask = pd.Series(False, index=df.index)
+
+        if mode == "Validate" and pattern:
+            failing_mask = ~col_series.str.match(pattern, na=False)
+        elif mode == "Extract" and pattern:
+            failing_mask = col_series.str.findall(pattern).apply(
+                lambda x: not (isinstance(x, list) and len(x) > 0)
+            )
+        elif mode == "Length":
+            length_mode = config.get("length_mode", "Exact")
+            lens = col_series.str.len()
+            if length_mode == "Exact":
+                failing_mask = lens != int(config.get("exact_length", 10))
+            elif length_mode == "Minimum":
+                failing_mask = lens < int(config.get("min_length", 0))
+            elif length_mode == "Maximum":
+                failing_mask = lens > int(config.get("max_length", 50))
+            elif length_mode == "Range":
+                lo, hi = int(config.get("min_length", 0)), int(config.get("max_length", 50))
+                failing_mask = (lens < lo) | (lens > hi)
+        # Clean / Replace / Case never reject — they're transforms. Show a
+        # small Before/After sample for those modes so the steward sees the
+        # effect (different code path below).
+
+        total_failing = int(failing_mask.sum())
+        if total_failing > 0:
+            failing_df = df[failing_mask].head(limit).copy()
+            failing_str = _stringify(failing_df[column])
+            rows: List[Dict[str, Any]] = []
+            for orig_idx, row in failing_df.iterrows():
+                row_dict: Dict[str, Any] = {}
+                for c in df.columns:
+                    v = row[c]
+                    row_dict[c] = "" if pd.isna(v) else str(v) if not isinstance(v, str) else v
+                row_dict["_before"] = failing_str.loc[orig_idx]
+                row_dict["_after"] = "[REJECT]"
+                row_dict["_status"] = "Rejected"
+                rows.append(row_dict)
+            return {
+                "column": column,
+                "rows": rows,
+                "total_failing": total_failing,
+                "is_transform": False,
+                "total_rows": int(len(df)),
+            }
+
+        # Pure-transform modes (Clean / Replace / Case) never reject —
+        # they transform every value. Show a Before/After sample so the
+        # steward can see what the rule does to real records.
+        is_transform = mode in ("Clean", "Replace", "Case")
+        if is_transform:
+            sample = _stringify(df[column].dropna()).head(limit)
+            sample_rows: List[Dict[str, Any]] = []
+            for orig_idx, val in sample.items():
+                full_row = df.loc[orig_idx]
+                row_dict = {}
+                for c in df.columns:
+                    v = full_row[c]
+                    row_dict[c] = "" if pd.isna(v) else str(v) if not isinstance(v, str) else v
+                after = val
+                if mode == "Clean" and pattern:
+                    after = re.sub(pattern, "", val)
+                elif mode == "Replace" and pattern:
+                    after = re.sub(pattern, replace, val)
+                elif mode == "Case":
+                    if case == "UPPERCASE":
+                        after = val.upper()
+                    elif case == "lowercase":
+                        after = val.lower()
+                    elif case == "Title Case":
+                        after = val.title()
+                row_dict["_before"] = val
+                row_dict["_after"] = str(after)
+                row_dict["_status"] = "Transform"
+                sample_rows.append(row_dict)
+            return {
+                "column": column,
+                "rows": sample_rows,
+                "total_failing": 0,
+                "is_transform": True,
+                "total_rows": int(len(df)),
+            }
+
+        # Validate / Extract / Length with zero failures — DON'T pad with
+        # valid sample rows (that buries the real answer). Just report
+        # 0 failures and let the UI show a success message.
+        return {
+            "column": column,
+            "rows": [],
+            "total_failing": 0,
+            "is_transform": False,
+            "total_rows": int(len(df)),
+        }
+    except Exception:
+        return None
+
+
 def get_preview(df: pd.DataFrame, column: str, config: Dict[str, Any]) -> Optional[List[Dict[str, str]]]:
     """Verbatim port of _get_preview_dataframe → list of {Before, After, Status}."""
     try:
@@ -88,7 +242,9 @@ def get_preview(df: pd.DataFrame, column: str, config: Dict[str, Any]) -> Option
         pattern = config.get("pattern", "")
         replace = config.get("replace", "")
         case = config.get("case", "UPPERCASE")
-        sample = df[column].dropna().astype(str).head(10)
+        # Normalize float-stored ints ("2017.0" → "2017") so AI regexes
+        # built for clean integer years actually match.
+        sample = _stringify(df[column].dropna()).head(10)
         if sample.empty:
             return None
         rows: List[Dict[str, str]] = []
@@ -149,13 +305,21 @@ def apply_column_rules(sess: SessionData, column: str) -> Tuple[int, int]:
     if not rules:
         return 0, 0
 
+    # Manual-review rules (Accuracy narratives, Uniqueness checks, etc.)
+    # can't be auto-executed — keep them in applied_rules untouched so the
+    # UI still shows them, but skip them in the transform loop.
+    keep_after = [r for r in rules if r.get("mode") == "ManualReview"]
+    rules = [r for r in rules if r.get("mode") != "ManualReview"]
+    if not rules:
+        return 0, 0
+
     backup_df = sess.df.copy()
     backup_reject = sess.reject_df.copy() if isinstance(sess.reject_df, pd.DataFrame) else pd.DataFrame()
 
     rejected_rows: List[pd.DataFrame] = []
     for rule in rules:
         try:
-            col_data = sess.df[column].astype(str)
+            col_data = _stringify(sess.df[column])
             mode = rule["mode"]
             if mode == "Clean":
                 sess.df[column] = col_data.str.replace(rule["pattern"], "", regex=True)
@@ -220,13 +384,24 @@ def apply_column_rules(sess: SessionData, column: str) -> Tuple[int, int]:
         else:
             sess.reject_df = pd.concat([sess.reject_df, all_rejected], ignore_index=True)
 
-    config["applied_rules"] = []
+    # Snapshot the rules we just applied so undo can restore them, and
+    # tally each one against its DAMA dimension for the progress meter.
+    applied_snapshot = list(rules)
+    backup_dim_counts = dict(sess.applied_rules_by_dim)
+    for rule in applied_snapshot:
+        dim = rule.get("dimension") or "Other"
+        sess.applied_rules_by_dim[dim] = sess.applied_rules_by_dim.get(dim, 0) + 1
+    # Preserve manual-review rules — they sit until a steward clears them.
+    config["applied_rules"] = list(keep_after)
     sess.validation_history.append({
         "description": f"Applied {len(rules)} rules to {column}",
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "rejected_count": rejected_count,
         "backup_df": backup_df,
         "backup_reject_df": backup_reject,
+        "backup_applied_rules": applied_snapshot,
+        "backup_applied_dim_counts": backup_dim_counts,
+        "column": column,
     })
     return len(rules), rejected_count
 
@@ -249,10 +424,19 @@ def apply_all_rules(sess: SessionData) -> Dict[str, Any]:
 
 
 def undo_last(sess: SessionData) -> bool:
-    """Verbatim port of _undo_last."""
+    """Verbatim port of _undo_last, augmented to also restore applied
+    rules and roll back the per-dimension counter so the progress meter
+    on the new Cleansing UI moves in lockstep with the data."""
     if not sess.validation_history:
         return False
     last = sess.validation_history.pop()
     sess.df = last["backup_df"].copy()
     sess.reject_df = last["backup_reject_df"].copy() if last.get("backup_reject_df") is not None else pd.DataFrame()
+    snapshot = last.get("backup_applied_rules") or []
+    col = last.get("column")
+    if col and col in sess.dq_config and snapshot:
+        sess.dq_config[col]["applied_rules"] = list(snapshot) + list(sess.dq_config[col].get("applied_rules", []))
+    backup_counts = last.get("backup_applied_dim_counts")
+    if isinstance(backup_counts, dict):
+        sess.applied_rules_by_dim = dict(backup_counts)
     return True

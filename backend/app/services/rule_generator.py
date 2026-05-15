@@ -41,6 +41,27 @@ def _semantic_type_is_identifierish(sem_type: str) -> bool:
     }
 
 
+def _is_unverifiable_accuracy(rule: Dict[str, Any]) -> bool:
+    """An Accuracy rule with no mechanical check is just narrative.
+
+    Per-column Accuracy rules from the LLM are usually tautologies like
+    "X must accurately reflect the real-world entity it represents" —
+    no regex, no bounds, no verifiable claim. They report "All values
+    valid" for every row regardless of the data, adding noise but no
+    signal. Profiling's Accuracy module already covers the verifiable
+    part (cross-field rules, datatype mismatches, outliers).
+
+    Keeps an Accuracy rule only when the LLM also emitted a regex
+    pattern or validation expression — those at least encode something
+    the engine can run.
+    """
+    if str(rule.get("dimension", "")).strip() != "Accuracy":
+        return False
+    has_regex = bool(str(rule.get("regex_pattern", "")).strip())
+    has_expr = bool(str(rule.get("validation_expression", "")).strip())
+    return not (has_regex or has_expr)
+
+
 def _prune_irrelevant_dimensions(
     rules: List[Dict[str, Any]],
     semantic_entry: Optional[Dict[str, Any]],
@@ -51,7 +72,10 @@ def _prune_irrelevant_dimensions(
     when a dimension isn't relevant. When a glossary entry is supplied, also
     drops Timeliness for non-date types and Uniqueness for non-identifier
     types — those dimensions would otherwise produce generic, low-value
-    rules.
+    rules. Per-column Accuracy narratives (e.g. "X must accurately
+    reflect the real-world entity") are also dropped — Profiling's
+    Accuracy is computed from cross-field rules + measurable signals,
+    not from these tautologies.
     """
     sem_type = (semantic_entry or {}).get("semantic_type") or ""
     is_dateish = _semantic_type_is_dateish(sem_type)
@@ -63,6 +87,9 @@ def _prune_irrelevant_dimensions(
         dim = str(rule.get("dimension", "")).strip()
 
         if any(s in text for s in _NOT_APPLICABLE_SENTINELS):
+            continue
+
+        if _is_unverifiable_accuracy(rule):
             continue
 
         if semantic_entry:

@@ -1,8 +1,10 @@
 """SQLAlchemy ORM models.
 
-Users are still authenticated via ``auth/users.json`` keyed by username, so
-projects reference the user by username string (no separate users table). If
-that ever changes, swap ``user_username`` for a ``user_id`` FK.
+Users are persisted in the ``users`` table so registrations survive a
+Render redeploy / container restart (Render's filesystem is ephemeral —
+users written to ``auth/users.json`` at runtime would be wiped on the
+next deploy). ``auth/users.json`` is now seed data only, copied into
+the table on first startup.
 """
 from __future__ import annotations
 
@@ -21,6 +23,23 @@ from .db import Base
 def _new_project_id() -> str:
     """Short, opaque, URL-safe project ID — e.g. ``proj_d4f81a6c``."""
     return f"proj_{uuid.uuid4().hex[:12]}"
+
+
+class User(Base):
+    """Authenticated user — primary identity for project ownership.
+
+    Username is the natural key (no surrogate id) because projects
+    already reference users by ``user_username`` string. Password is a
+    SHA-256 hex digest of the salted password (same scheme as the legacy
+    ``auth/users.json``).
+    """
+
+    __tablename__ = "users"
+
+    username: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    password: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class Project(Base):

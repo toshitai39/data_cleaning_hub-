@@ -44,6 +44,11 @@ class SessionData:
     dq_config: Dict[str, Any] = field(default_factory=dict)
     reject_df: Optional[pd.DataFrame] = None
     validation_history: List[Dict[str, Any]] = field(default_factory=list)
+    # Cumulative count of rules applied per DAMA dimension. Incremented
+    # whenever apply_column_rules / apply_dimension fires so the new
+    # dimension-tabbed Cleansing UI can render an "X / Y applied"
+    # progress meter without scanning history records.
+    applied_rules_by_dim: Dict[str, int] = field(default_factory=dict)
     # Columns the user has flagged as "of interest" — downstream tabs (profiling,
     # rule generator, quality) may restrict their work to these. Empty list means
     # "no explicit selection yet → treat all dataset columns as in-scope".

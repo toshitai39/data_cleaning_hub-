@@ -20,10 +20,39 @@ enrich_dataframe_regex_patterns = _engine.enrich_dataframe_regex_patterns
 _extract_max_chars = _engine._extract_max_chars
 
 
+def _drop_narrative_accuracy(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove Accuracy rules with no mechanical check from the RAW df.
+
+    Must be called BEFORE enrich_dataframe_regex_patterns — that function
+    infers regexes from column names, which would make every Accuracy row
+    appear to have a check and prevent this filter from firing.
+    """
+    if "Dimension" not in df.columns:
+        return df
+    raw_regex = (
+        df["Regex Pattern"].astype(str).str.strip()
+        if "Regex Pattern" in df.columns
+        else pd.Series("", index=df.index)
+    )
+    raw_expr = (
+        df["Validation Expression"].astype(str).str.strip()
+        if "Validation Expression" in df.columns
+        else pd.Series("", index=df.index)
+    )
+    is_accuracy = df["Dimension"].astype(str).str.strip() == "Accuracy"
+    has_check = raw_regex.ne("") | raw_expr.ne("")
+    drop_mask = is_accuracy & ~has_check
+    if drop_mask.any():
+        return df.loc[~drop_mask].reset_index(drop=True)
+    return df
+
+
 def get_enriched_rg_rules(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
     if df is None or df.empty:
         return None
-    return enrich_dataframe_regex_patterns(df.copy())
+    # Filter BEFORE enrichment so inferred regexes don't hide narratives.
+    cleaned = _drop_narrative_accuracy(df.copy())
+    return enrich_dataframe_regex_patterns(cleaned)
 
 
 def rg_row_to_applied_rule(row: pd.Series) -> Optional[Dict[str, Any]]:
@@ -35,10 +64,15 @@ def rg_row_to_applied_rule(row: pd.Series) -> Optional[Dict[str, Any]]:
     ts = datetime.now().strftime("%H:%M:%S")
 
     def _base(**overrides):
+        # source/dimension let the Cleansing UI group rules by DAMA
+        # dimension and chip them as AI vs. user-authored.
         base = {
             "replace": "", "case": "UPPERCASE", "length_mode": "Exact",
             "min_length": 0, "max_length": 50, "exact_length": 10,
             "timestamp": ts,
+            "source": "ai",
+            "dimension": dim or "Other",
+            "rule_text": dq,
         }
         base.update(overrides)
         return base

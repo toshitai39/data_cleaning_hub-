@@ -110,6 +110,26 @@ def _safe_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
     return df.to_dict(orient="records")
 
 
+def _purge_ai_synced_from_dq_config(sess: SessionData) -> None:
+    """Drop every applied_rule in dq_config whose source is "ai".
+
+    These were auto-synced by an earlier generate call. We DO NOT delete
+    the dq_config entries themselves (config flags like ``enabled`` are
+    preserved) — only the rules array is filtered. Truly custom rules
+    (source != "ai", e.g. user-authored via Add Custom Rule, or loaded
+    from the library) are kept untouched.
+    """
+    if not sess.dq_config:
+        return
+    for col, cfg in sess.dq_config.items():
+        rules = cfg.get("applied_rules", []) or []
+        kept = [r for r in rules if r.get("source", "ai") != "ai"]
+        if len(kept) != len(rules):
+            cfg["applied_rules"] = kept
+    if sess.active_project_id:
+        save_dq_config(sess.active_project_id, sess.dq_config)
+
+
 def _sync_rules_into_dq_config(sess: SessionData, df_rules: pd.DataFrame) -> None:
     """Bridge: every single-column row in ``df_rules`` that translates to
     a Cleansing operation gets appended into ``sess.dq_config[col]
@@ -215,10 +235,16 @@ def generate(
 
     sess.ai_validation_rules = df_rules
 
-    # Bridge to Cleansing — every column rule in the freshly generated
-    # set becomes an applied_rule under that column's dq_config, ready
-    # to be applied with one click on the Cleansing tab.
-    _sync_rules_into_dq_config(sess, df_rules)
+    # Purge AI rules carried over from a previous generation, but
+    # preserve user-authored ones. Without this, regenerating after
+    # editing rules accumulates duplicates in dq_config.
+    _purge_ai_synced_from_dq_config(sess)
+
+    # NOTE: We DELIBERATELY no longer auto-sync AI rules into dq_config.
+    # The Cleansing tab reads AI rules directly via get_enriched_rg_rules
+    # and lazily imports them per-dimension on first Preview / Apply.
+    # Auto-syncing here caused the same rule to appear twice (once as AI,
+    # once as Custom) and accumulated across regenerations.
 
     # Reflect generation in the project so Home tiles show "Rules ready",
     # and persist the rules DataFrame to disk so it survives a server
@@ -254,24 +280,50 @@ def generate(
     }
 
 
+def _drop_unverifiable_accuracy_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Strip per-column Accuracy rules with no mechanical check.
+
+    Call this on the RAW dataframe BEFORE enrich_dataframe_regex_patterns
+    — enrichment infers regexes from column names, making has_check=True
+    for every Accuracy row and preventing the filter from ever firing.
+    """
+    if "Dimension" not in df.columns:
+        return df
+    raw_regex = df["Regex Pattern"].astype(str).str.strip() if "Regex Pattern" in df.columns else pd.Series("", index=df.index)
+    raw_expr = df["Validation Expression"].astype(str).str.strip() if "Validation Expression" in df.columns else pd.Series("", index=df.index)
+    is_accuracy = df["Dimension"].astype(str).str.strip() == "Accuracy"
+    has_check = raw_regex.ne("") | raw_expr.ne("")
+    drop_mask = is_accuracy & ~has_check
+    if not drop_mask.any():
+        return df
+    return df.loc[~drop_mask].reset_index(drop=True)
+
+
 @router.get("/rules")
 def get_rules(sess: SessionData = Depends(require_dataframe)) -> dict:
+    """Return the AI-generated rules dataframe only.
+
+    The Cleansing tab is the place where AI + user-authored rules are
+    blended together. The Rule Generator view is, by design, just the
+    AI output. Mixing the two here was the cause of the duplicate-rule
+    bug (same rule appearing as AI and Custom) and unstable totals.
+    """
     df = sess.ai_validation_rules
     if df is None or (isinstance(df, pd.DataFrame) and df.empty):
         return {"generated": False, "rules": []}
-    if isinstance(df, pd.DataFrame) and "Regex Pattern" not in df.columns:
-        df = df.copy()
+    df = df.copy()
+    if "Regex Pattern" not in df.columns:
         df["Regex Pattern"] = ""
-    # Belt-and-braces normaliser — load_rules already does this on disk
-    # reads, but in-session rules created by older paths may still carry
-    # Consistency / Validity labels.
-    if isinstance(df, pd.DataFrame) and "Dimension" in df.columns:
-        df = df.copy()
+    if "Dimension" in df.columns:
         df["Dimension"] = df["Dimension"].astype(str).replace({
             "Consistency": "Standardisation",
             "Validity":    "Validation",
         })
-    df = enrich_dataframe_regex_patterns(df) if isinstance(df, pd.DataFrame) else df
+    # Drop unverifiable Accuracy narratives BEFORE enrichment — enrich
+    # adds inferred regexes from column names, which would mask the filter.
+    df = _drop_unverifiable_accuracy_rows(df)
+    df = enrich_dataframe_regex_patterns(df)
+
     return {
         "generated": True,
         "total_rules": len(df),
@@ -284,6 +336,7 @@ def get_rules(sess: SessionData = Depends(require_dataframe)) -> dict:
 @router.post("/clear")
 def clear(sess: SessionData = Depends(require_dataframe)) -> dict:
     sess.ai_validation_rules = None
+    _purge_ai_synced_from_dq_config(sess)
     if sess.active_project_id:
         save_rules(sess.active_project_id, None)
     return {"ok": True}
@@ -291,8 +344,13 @@ def clear(sess: SessionData = Depends(require_dataframe)) -> dict:
 
 @router.post("/regenerate")
 def regenerate(sess: SessionData = Depends(require_dataframe)) -> dict:
-    """Streamlit's 'Regenerate Rules' button just clears state — UI calls /generate after."""
+    """Streamlit's 'Regenerate Rules' button just clears state — UI calls /generate after.
+
+    Also wipes AI-sourced rules from dq_config so the next /generate
+    doesn't accumulate duplicates. User-authored custom rules stay.
+    """
     sess.ai_validation_rules = None
+    _purge_ai_synced_from_dq_config(sess)
     if sess.active_project_id:
         save_rules(sess.active_project_id, None)
     return {"ok": True}

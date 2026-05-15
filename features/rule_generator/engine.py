@@ -184,7 +184,7 @@ def _ensure_regex_pattern(rule: Dict[str, Any], metadata: Dict[str, Any]) -> Non
     rule_text = str(rule.get("data_quality_rule", "")).lower()
     if dim == "Validation" and "character" in rule_text and metadata.get("max_length") is not None:
         n = int(metadata["max_length"])
-        rule["regex_pattern"] = f"^.{0,{n}}$"
+        rule["regex_pattern"] = rf"^.{{0,{n}}}$"
 
 
 _ALLOWED_DIMENSIONS = (
@@ -1112,9 +1112,33 @@ def _extract_allowed_values(rule_text: str) -> Optional[List[str]]:
 
 
 def _extract_max_chars(rule_text: str) -> Optional[int]:
-    """Parse 'maximum X characters' from a rule statement."""
-    m = re.search(r'(?:maximum|max)\s+(\d+)\s+characters?', rule_text, re.IGNORECASE)
-    return int(m.group(1)) if m else None
+    """Parse a max-character bound from a rule statement.
+
+    Handles all common phrasings:
+      - "maximum 255 characters" / "max 255 chars"
+      - "maximum length of 255 characters"
+      - "up to 255 characters"
+      - "no more than 255 characters"
+      - "at most 255 characters"
+      - "length of at most 255 characters"
+      - "length should not exceed 255"
+    """
+    patterns = [
+        r'(?:maximum|max)\s+length\s+(?:of\s+)?(\d+)\s*(?:char|character)?s?',
+        r'(?:maximum|max)\s+(\d+)\s*(?:char|character)s?',
+        r'up\s+to\s+(\d+)\s*(?:char|character)s?',
+        r'no\s+more\s+than\s+(\d+)\s*(?:char|character)s?',
+        r'at\s+most\s+(\d+)\s*(?:char|character)s?',
+        r'length\s+(?:should\s+)?not\s+exceed\s+(\d+)',
+        r'not\s+(?:longer|more)\s+than\s+(\d+)\s*(?:char|character)s?',
+        # Trailing qualifier: "length of 50 characters at maximum" / "N chars max"
+        r'(\d+)\s*(?:char|character)s?\s+(?:at\s+(?:maximum|most)|max(?:imum)?)\b',
+    ]
+    for pat in patterns:
+        m = re.search(pat, rule_text, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
+    return None
 
 
 def _extract_range(rule_text: str) -> Tuple[Optional[float], Optional[float]]:
@@ -1194,15 +1218,71 @@ def infer_regex_pattern_from_rule(dimension: str, rule_text: str) -> str:
         if "no special character" in rl:
             return r"^[A-Za-z0-9\s\-_.]+$"
 
+    # Max-length is checked BEFORE exact-length because phrases like
+    # "maximum length of 255 characters" otherwise match the exact-length
+    # regex below and produce ^.{255}$, rejecting every shorter value.
     mc = _extract_max_chars(rt)
     if mc is not None:
-        return rf"^.{0,{mc}}$"
+        return rf"^.{{0,{mc}}}$"
+
+    # Boolean — typical normalisation accepts true/false, 0/1, yes/no.
+    if re.search(r"\bboolean( value)?\b", rl) or re.search(r"\b(must be|is)\s+(a\s+)?bool(ean)?\b", rl):
+        return r"(?i)^(true|false|0|1|y|n|yes|no|t|f)$"
+
+    # Exact length: "string with a length of 8 characters",
+    # "length of 36 characters", "N characters long", "exactly N chars".
+    # Skip if the text actually expresses a maximum/upper bound — those
+    # were handled above by _extract_max_chars.
+    if not re.search(r"\b(max(imum)?|up\s+to|no\s+more\s+than|at\s+most|not\s+(?:longer|more)\s+than)\b", rl):
+        m = re.search(
+            r"(?:length\s+(?:of\s+)?|exactly\s+|of\s+length\s+)(\d+)\s*(?:char|character)s?",
+            rl,
+        )
+        if m:
+            n = int(m.group(1))
+            return rf"^.{{{n}}}$"
+        m = re.search(r"\b(\d+)\s+characters?\s+(?:long|exactly)\b", rl)
+        if m:
+            n = int(m.group(1))
+            return rf"^.{{{n}}}$"
+
+    # "N-digit number" — bare or with a format mask. Examples:
+    # "9-digit number formatted as XX-XXXXXXX"  -> ^\d{2}-\d{7}$
+    # "10 digit phone number"                   -> ^\d{10}$
+    # "must be a 6 digit pincode"               -> ^\d{6}$
+    fmt = re.search(r"formatted\s+as\s+([0-9A-Za-z\-/_. ]+)", rt)
+    if fmt:
+        mask = fmt.group(1).strip().rstrip(".")
+        # Group runs of letters/digits — turn 'X' into a digit slot when
+        # the rule talks about digits, otherwise treat any letter run
+        # as alphanumeric.
+        is_digit_rule = bool(re.search(r"\bdigit", rl))
+        pattern_parts: List[str] = []
+        for tok in re.findall(r"([A-Za-z]+|\d+|[^A-Za-z0-9])", mask):
+            if tok.isalpha():
+                slot = r"\d" if is_digit_rule else r"[A-Za-z0-9]"
+                pattern_parts.append(rf"{slot}{{{len(tok)}}}")
+            elif tok.isdigit():
+                pattern_parts.append(re.escape(tok))
+            else:
+                pattern_parts.append(re.escape(tok))
+        if pattern_parts:
+            return r"^" + "".join(pattern_parts) + r"$"
+
+    m = re.search(r"(\d+)[-\s]?digit\s+(?:number|code|id)", rl)
+    if m:
+        n = int(m.group(1))
+        return rf"^\d{{{n}}}$"
 
     if "valid string" in rl or "valid string format" in rl:
         return r"^(?=.*\S).*$"
 
     if "email" in rl and "format" in rl:
         return r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
+
+    # Lenient URL — covers http(s) and bare domain-only entries.
+    if re.search(r"\bvalid\s+url\b", rl) or ("url" in rl and ("format" in rl or "string representing" in rl)):
+        return r"^(https?://)?[A-Za-z0-9.\-]+\.[A-Za-z]{2,}([/?#].*)?$"
 
     if re.search(r"\bdd-mm-yyyy\b", rl, re.IGNORECASE):
         return r"^\d{2}-\d{2}-\d{4}$"
@@ -1211,10 +1291,33 @@ def infer_regex_pattern_from_rule(dimension: str, rule_text: str) -> str:
     if re.search(r"\bmm/dd/yyyy\b", rl, re.IGNORECASE):
         return r"^\d{2}/\d{2}/\d{4}$"
 
+    # ISO 8601 timestamp / generic date phrasing
+    if "iso 8601" in rl or "iso8601" in rl or re.search(r"\biso\s+date\b", rl):
+        return r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$"
+
     if re.search(
         r"(in uppercase|uppercase format|must be uppercase)\b", rl
     ) and "not uppercase" not in rl:
         return r"^[^a-z]*$"
+
+    # Known well-known formats — CIN (Indian Corporate ID), GSTIN, PAN,
+    # IFSC, EORI etc. The LLM-driven rule generator often emits prose
+    # like "CIN must satisfy structural rules" instead of repeating the
+    # pattern; resolve those mechanically here.
+    if re.search(r"\bcin\b", rl) and ("structural" in rl or "valid" in rl or "format" in rl):
+        return r"^[LUFTHGCK]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6}$"
+    if re.search(r"\bgst(in)?\b", rl) and ("valid" in rl or "format" in rl):
+        return r"^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}Z[A-Z\d]{1}$"
+    if re.search(r"\bpan\b", rl) and ("valid" in rl or "format" in rl):
+        return r"^[A-Z]{5}\d{4}[A-Z]$"
+    if re.search(r"\bifsc\b", rl) and ("valid" in rl or "format" in rl):
+        return r"^[A-Z]{4}0[A-Z0-9]{6}$"
+    if re.search(r"\beori\b", rl) and ("valid" in rl or "structural" in rl or "format" in rl):
+        return r"^[A-Z]{2}[A-Za-z0-9]{1,15}$"
+    if re.search(r"\bduns\b", rl) and ("valid" in rl or "format" in rl):
+        return r"^\d{9}$"
+    if re.search(r"\bein\b", rl) and ("valid" in rl or "format" in rl or "digit" in rl):
+        return r"^\d{2}-\d{7}$"
 
     return ""
 

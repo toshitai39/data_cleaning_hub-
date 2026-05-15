@@ -67,5 +67,16 @@ app.include_router(admin_router.router)
 
 @app.on_event("startup")
 def _on_startup() -> None:
-    """Create the projects table on first run (idempotent)."""
+    """Create tables on first run + seed users from JSON if the table is empty.
+
+    The seed step exists because Render's filesystem is ephemeral —
+    user accounts must live in the database to survive a redeploy.
+    """
     init_db()
+    # Local import: auth.logic pulls in SessionLocal which depends on
+    # init_db having registered the User model already.
+    from auth.logic import ensure_seeded
+    seeded = ensure_seeded()
+    if seeded:
+        import logging
+        logging.getLogger(__name__).info("auth: bootstrap seeded %d users.", seeded)
