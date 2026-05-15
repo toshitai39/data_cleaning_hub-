@@ -613,6 +613,14 @@ def by_dimension(sess: SessionData = Depends(require_dataframe)) -> dict:
 
     # ── Top-level totals
     all_rules = [r for d in dimensions for r in d["rules"]]
+    # Row-count summary so the Cleansing UI can show "X of Y rows
+    # cleansed" without an extra API hop. original_rows = the row count
+    # at project load; current_rows = sess.df after every cleansing
+    # action; rejected_rows = what landed in sess.reject_df.
+    original_rows = int(len(sess.original_df)) if isinstance(sess.original_df, pd.DataFrame) else int(len(sess.df) if sess.df is not None else 0)
+    current_rows = int(len(sess.df)) if sess.df is not None else 0
+    rejected_rows = int(len(sess.reject_df)) if isinstance(sess.reject_df, pd.DataFrame) else 0
+    columns_count = int(sess.df.shape[1]) if sess.df is not None else 0
     totals = {
         "generated": len(all_rules) + cross_count,
         "actionable": sum(1 for r in all_rules if r["status"] == "actionable"),
@@ -623,10 +631,15 @@ def by_dimension(sess: SessionData = Depends(require_dataframe)) -> dict:
         "blocked_incomplete": sum(1 for r in all_rules if r["status"] == "blocked_incomplete"),
         "multi_cde":  cross_count + sum(1 for r in all_rules if r["status"] == "multi_cde"),
         "invalid":    sum(1 for r in all_rules if r["status"] == "invalid"),
-        "rejected":   int(len(sess.reject_df)) if isinstance(sess.reject_df, pd.DataFrame) else 0,
+        "rejected":   rejected_rows,
         "history":    len(sess.validation_history),
         "empty_columns": len(empty_columns),
         "failing_rows_total": sum(d.get("failing_rows_total", 0) for d in dimensions),
+        # Dataset shape — rows before/after cleansing + the steady column count.
+        "original_rows": original_rows,
+        "current_rows":  current_rows,
+        "rows_removed":  max(0, original_rows - current_rows),
+        "columns":       columns_count,
     }
     return {
         "totals": totals,
@@ -1749,6 +1762,14 @@ def fix_cross_field(
             "note": "Rule has no failing rows; nothing to do.",
         }
 
+    # Snapshot state BEFORE the mutation so undo_last can restore it.
+    # Cross-field fixes previously bypassed validation_history entirely —
+    # which meant Undo Last did nothing, Reset All forgot the rejection
+    # log, and the dropped rows never appeared in the Rejected Rows panel.
+    backup_df = sess.df.copy()
+    backup_reject = sess.reject_df.copy() if isinstance(sess.reject_df, pd.DataFrame) else pd.DataFrame()
+    backup_dim_counts = dict(sess.applied_rules_by_dim)
+
     if body.action == "deduplicate":
         if result.family != "composite_unique":
             raise HTTPException(
@@ -1757,14 +1778,59 @@ def fix_cross_field(
             )
         cols = [c for c in result.columns if c in sess.df.columns]
         before = int(len(sess.df))
-        sess.df = sess.df.drop_duplicates(subset=cols, keep="first").reset_index(drop=True)
+        # Identify the rows we'll drop so we can copy them into reject_df.
+        dup_mask = sess.df.duplicated(subset=cols, keep="first")
+        dropped_rows_df = sess.df.loc[dup_mask].copy()
+        # Preserve the pandas index — see apply_column_rules for why.
+        sess.df = sess.df.loc[~dup_mask]
         dropped = before - int(len(sess.df))
     elif body.action == "drop":
         before = int(len(sess.df))
-        sess.df = sess.df.loc[~result.failing_mask].reset_index(drop=True)
+        dropped_rows_df = sess.df.loc[result.failing_mask].copy()
+        sess.df = sess.df.loc[~result.failing_mask]
         dropped = before - int(len(sess.df))
     else:
         raise HTTPException(status_code=400, detail=f"Unknown action: {body.action}")
+
+    # ── Funnel into the same state plumbing the per-column path uses ──
+    # 1) Push the dropped rows into reject_df with rule context, so the
+    #    Rejected Rows accordion shows them.
+    if not dropped_rows_df.empty:
+        rule_label = f"Cross-field · {rule_text[:80]}"
+        dropped_rows_df["Rejection_Reason"] = f"{rule_label} — {body.action}"
+        dropped_rows_df["Rejected_Column"] = " + ".join(result.columns or [])
+        dropped_rows_df["Rejected_At"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if sess.reject_df is None or sess.reject_df.empty:
+            sess.reject_df = dropped_rows_df
+        else:
+            sess.reject_df = pd.concat([sess.reject_df, dropped_rows_df], ignore_index=True)
+
+    # 2) Increment the per-dimension applied counter so the Cleansing
+    #    progress tile for Cross-field reflects the action.
+    sess.applied_rules_by_dim["Cross-field Validation"] = (
+        sess.applied_rules_by_dim.get("Cross-field Validation", 0) + 1
+    )
+
+    # 3) Push a validation_history entry shaped exactly like the per-
+    #    column path's, so undo_last() can roll it back without special
+    #    casing cross-field.
+    sess.validation_history.append({
+        "description": f"Applied cross-field rule · {result.family} · {body.action}",
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "rejected_count": dropped,
+        "backup_df": backup_df,
+        "backup_reject_df": backup_reject,
+        "backup_applied_rules": [{
+            "mode": "CrossField",
+            "name": f"CF rule {rule_id}",
+            "pattern": "",
+            "dimension": "Cross-field Validation",
+            "source": "ai",
+            "rule_text": rule_text,
+        }],
+        "backup_applied_dim_counts": backup_dim_counts,
+        "column": " + ".join(result.columns or []),
+    })
 
     sess.fixes_applied.append({
         "type": "cross_field",
@@ -1776,9 +1842,8 @@ def fix_cross_field(
         "timestamp": datetime.now().isoformat(),
     })
 
-    # Persist the mutation so a server restart (or another tab reading
-    # /projects/{id}) sees the dropped rows immediately.
-    _persist_working(sess)
+    # Persist the mutation + rejects so a server restart picks them up.
+    _persist_cleansing_state(sess)
 
     return {
         "ok": True,

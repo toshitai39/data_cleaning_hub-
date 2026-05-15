@@ -20,14 +20,19 @@ export default function DataProfiling() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
-  // Pull both the basic KPI (rows / column count / completeness) and the
-  // full quality scorecard so the strip at the top can show every
-  // dimension's score alongside the dataset basics — one glance, all
-  // the relevant numbers visible without scrolling.
+  // Data Profiling is the LIVE view — reflects the current working
+  // dataset (sess.df), which is mutated by Cleansing + Find Duplicates.
+  // Pass source=current so the numbers refresh after every cleansing
+  // action, and so the top scorecard always agrees with the detailed
+  // drill-down tabs (both read the same dataframe through the same
+  // scoring code). The Initial Dashboard is the baseline-only view;
+  // the Final Dashboard is the same data as here but with an
+  // executive framing.
+  const SRC = { params: { source: 'current' } };
   const load = () =>
     Promise.all([
-      api.get('/profile/kpi'),
-      api.get('/profile/executive-summary').catch(() => ({ data: null })),
+      api.get('/profile/kpi', SRC),
+      api.get('/profile/executive-summary', SRC).catch(() => ({ data: null })),
     ]).then(([kpiR, esR]) => {
       setKpi(kpiR.data);
       setExecutiveSummary(esR?.data || null);

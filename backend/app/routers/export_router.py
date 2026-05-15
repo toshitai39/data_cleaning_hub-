@@ -202,36 +202,70 @@ def export_batch(body: BatchExportBody, sess: SessionData = Depends(require_data
     )
 
 
-# ---------- profiling report (HTML / PDF) -------------------------------
+# ---------- client-grade DQ report (HTML / PDF) -------------------------
+
+from sqlalchemy.orm import Session  # noqa: E402
+from ..db import get_db  # noqa: E402
+from ..models import Project  # noqa: E402
+from ..services.cleansing_report import (  # noqa: E402
+    build_report_html as _build_dq_report_html,
+    html_to_pdf_bytes as _dq_html_to_pdf,
+)
+from ..services.stream_context import build_project_context  # noqa: E402
+
+
+def _resolve_project_context(sess: SessionData, db: Session):
+    """Look up the active project's master-data context so the report
+    cover and DAMA Uniqueness scoring reflect entity-master vs joined-view
+    semantics correctly."""
+    if not sess.active_project_id or not sess.user or not sess.user.get("username"):
+        return {}
+    project = (
+        db.query(Project)
+        .filter(
+            Project.id == sess.active_project_id,
+            Project.user_username == sess.user["username"],
+        )
+        .one_or_none()
+    )
+    return build_project_context(project) if project is not None else {}
+
 
 @router.post("/report/html")
-def report_html(sess: SessionData = Depends(require_dataframe)):
-    html = generate_profiling_report_html(
-        sess.df, sess.column_profiles, sess.quality_report, sess.filename,
-    )
+def report_html(sess: SessionData = Depends(require_dataframe),
+                db: Session = Depends(get_db)):
+    """Client-grade Data Quality report — covers cleansing actions,
+    rejected rows, DAMA dimension scorecard, per-CDE health, and
+    recommended next steps. Sourced live from session state, so the
+    numbers always match what the steward sees on screen."""
+    project_context = _resolve_project_context(sess, db)
+    html = _build_dq_report_html(sess, project_context=project_context)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = (sess.filename or "dataset").rsplit(".", 1)[0]
     return _stream(
         html.encode("utf-8"),
         "text/html",
-        f"profiling_report_{timestamp}.html",
+        f"data_quality_report_{base}_{timestamp}.html",
     )
 
 
 @router.post("/report/pdf")
-def report_pdf(sess: SessionData = Depends(require_dataframe)):
-    html = generate_profiling_report_html(
-        sess.df, sess.column_profiles, sess.quality_report, sess.filename,
-    )
-    pdf_bytes = html_to_pdf_bytes(html)
+def report_pdf(sess: SessionData = Depends(require_dataframe),
+               db: Session = Depends(get_db)):
+    """PDF version of the client-grade report. Falls back to HTML
+    download when xhtml2pdf is not installed in the runtime."""
+    project_context = _resolve_project_context(sess, db)
+    html = _build_dq_report_html(sess, project_context=project_context)
+    pdf_bytes = _dq_html_to_pdf(html)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = (sess.filename or "dataset").rsplit(".", 1)[0]
     if pdf_bytes:
         return _stream(
             pdf_bytes, "application/pdf",
-            f"profiling_report_{timestamp}.pdf",
+            f"data_quality_report_{base}_{timestamp}.pdf",
         )
-    # Fall back to HTML when xhtml2pdf isn't installed (Streamlit parity)
     return _stream(
         html.encode("utf-8"),
         "text/html",
-        f"profiling_report_{timestamp}.html",
+        f"data_quality_report_{base}_{timestamp}.html",
     )

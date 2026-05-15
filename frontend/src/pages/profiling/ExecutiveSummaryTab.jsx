@@ -10,6 +10,7 @@ import HelpOutlineOutlinedIcon from '@mui/icons-material/HelpOutlineOutlined';
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded';
 import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded';
 import api from '../../api.js';
+import { useDataset } from '../../context/DatasetContext.jsx';
 import CompletenessTab from './CompletenessTab.jsx';
 import ValidationDetail from './ValidationDetail.jsx';
 import UniquenessDetail from './UniquenessDetail.jsx';
@@ -176,6 +177,7 @@ function ScoreCard({ dim, onDrillDown }) {
 
 
 export default function ExecutiveSummaryTab() {
+  const { state } = useDataset();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
@@ -186,13 +188,16 @@ export default function ExecutiveSummaryTab() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    // source=current → live view that refreshes after every cleansing
+    // action. The state.operations dep re-fires the effect so the
+    // dimension cards stay in sync with the top KpiBar.
     api
-      .get('/profile/executive-summary')
+      .get('/profile/executive-summary', { params: { source: 'current' } })
       .then(({ data }) => { if (!cancelled) setData(data); })
       .catch((e) => { if (!cancelled) setErr(e?.response?.data?.detail || 'Failed to compute executive summary'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, []);
+  }, [state.operations]);
 
   if (loading) return <LinearProgress />;
   if (err) return <Alert severity="error">{err}</Alert>;

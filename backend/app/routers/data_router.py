@@ -27,7 +27,11 @@ from ..services.cde_recommender import (
     generate_cde_meta as _generate_cde_meta,
 )
 from ..services.llm_rules import llm_available as _llm_available
-from ..services.compare_engine import cell_diff as _cell_diff, stats as _compare_stats
+from ..services.compare_engine import (
+    cell_diff as _cell_diff,
+    per_column_changes as _per_column_changes,
+    stats as _compare_stats,
+)
 from ..services.db_connector_service import (
     build_url as _build_url,
     connect_and_list,
@@ -130,7 +134,15 @@ async def upload(
 
 @router.get("/state")
 def state(sess: SessionData = Depends(get_session)) -> dict:
-    """Quick state snapshot for the sidebar."""
+    """Quick state snapshot for the sidebar + drill-down freshness.
+
+    ``operations`` counts EVERY mutation that should invalidate cached
+    profile views — both duplicate fixes (``sess.fixes_applied``) and
+    cleansing rule applications (``sess.validation_history``). The
+    Data Profiling drill-downs depend on this number so their useEffect
+    re-fires whenever the working df is mutated, keeping the top
+    scorecard and detail tabs in sync.
+    """
     df = sess.df
     quality = None
     if sess.quality_report is not None:
@@ -141,7 +153,7 @@ def state(sess: SessionData = Depends(get_session)) -> dict:
         "rows": int(len(df)) if df is not None else 0,
         "columns": int(len(df.columns)) if df is not None else 0,
         "quality_score": quality,
-        "operations": len(sess.fixes_applied),
+        "operations": len(sess.fixes_applied) + len(sess.validation_history),
     }
 
 
@@ -287,6 +299,21 @@ def compare_stats(sess: SessionData = Depends(require_dataframe)) -> dict:
     if sess.original_df is None:
         raise HTTPException(status_code=400, detail="No original snapshot available.")
     return _compare_stats(sess.original_df, sess.df)
+
+
+@router.get("/compare/by-column")
+def compare_by_column(sess: SessionData = Depends(require_dataframe)) -> dict:
+    """Per-CDE change ledger across the WHOLE diff.
+
+    Returns one row per critical data element that has any changed cells,
+    classified by dominant change type (Modified / Standardised /
+    Cleared / Backfilled) with up to 3 before/after samples per column.
+    Drives the new Compare page narrative summary so stewards don't have
+    to scan every row to see what happened.
+    """
+    if sess.original_df is None:
+        raise HTTPException(status_code=400, detail="No original snapshot available.")
+    return _per_column_changes(sess.original_df, sess.df)
 
 
 @router.get("/compare/cells")

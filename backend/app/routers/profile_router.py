@@ -41,7 +41,7 @@ from core.drift_detector import (
 from core.profiler import DataProfilerEngine
 
 from ..db import get_db
-from ..deps import require_dataframe, scoped_dataframe
+from ..deps import require_dataframe, scoped_columns, scoped_dataframe
 from ..models import Project
 from ..services.ai_validation_engine import (
     AIValidationEngine,
@@ -76,13 +76,34 @@ router = APIRouter(prefix="/profile", tags=["profile"])
 
 # ---------- helpers ------------------------------------------------------
 
+def _df_fingerprint(df: pd.DataFrame) -> str:
+    """Cheap shape signature used to invalidate cached column_profiles
+    after Cleansing / Find Duplicates drops rows. Caching by (rows,
+    cols, column-name-tuple) is sufficient — every mutation that
+    matters for profile metrics changes one of those three."""
+    try:
+        return f"{len(df)}|{len(df.columns)}|{tuple(map(str, df.columns))}"
+    except Exception:
+        return ""
+
+
 def _ensure_profiles(sess: SessionData) -> Dict[str, Any]:
-    if not sess.column_profiles:
-        df = scoped_dataframe(sess)
+    """Build (or rebuild) the cached column_profiles dict.
+
+    Recomputes whenever the dataframe's shape signature changes —
+    otherwise after cleansing drops rows from sess.df, the /kpi
+    endpoint and downstream consumers would keep serving stale
+    null-counts / unique-counts from the pre-cleansing snapshot.
+    """
+    df = scoped_dataframe(sess)
+    fp = _df_fingerprint(df)
+    cached_fp = getattr(sess, "_profile_fp", None)
+    if not sess.column_profiles or cached_fp != fp:
         engine = DataProfilerEngine(df, sess.filename)
         engine.profile(fast_mode=True)
         sess.column_profiles = dict(engine.column_profiles)
         sess.quality_report = engine.quality_report
+        sess._profile_fp = fp  # type: ignore[attr-defined]
     return sess.column_profiles
 
 
@@ -230,8 +251,11 @@ def dashboard(sess: SessionData = Depends(require_dataframe)) -> dict:
 
 
 @router.get("/kpi")
-def kpi(sess: SessionData = Depends(require_dataframe)) -> dict:
-    df = scoped_dataframe(sess)
+def kpi(
+    source: str = Query("current", pattern="^(current|original)$"),
+    sess: SessionData = Depends(require_dataframe),
+) -> dict:
+    df = _view_df(sess, source)
     profiles = _ensure_profiles(sess)
     total_rows = len(df)
     total_cols = len(df.columns)
@@ -261,6 +285,30 @@ def kpi(sess: SessionData = Depends(require_dataframe)) -> dict:
 
 
 # ---------- DAMA Executive Summary --------------------------------------
+
+def _view_df(sess: SessionData, source: str = "current") -> pd.DataFrame:
+    """Return the dataframe a profile endpoint should compute against.
+
+    ``current`` (default) → ``sess.df`` (live working state, mutates as
+    Cleansing / Find Duplicates run).
+    ``original`` → ``sess.original_df`` (as-uploaded baseline, never
+    modified by cleansing).
+
+    Used by every user-facing profile endpoint that has a stable
+    "baseline vs outcome" semantic — Data Profiling reads ``original``
+    so its numbers match the Initial Dashboard, Cleansing reads
+    ``current`` so it operates on the live working df. Without this
+    helper the Initial Dashboard would show 12 rows / Validation 68%
+    while the Profile page showed 3 rows / Validation 46% on the same
+    project — same scoring code, different denominators.
+    """
+    if source == "original" and isinstance(sess.original_df, pd.DataFrame):
+        cols = scoped_columns(sess)
+        if cols and len(cols) != len(sess.original_df.columns):
+            return sess.original_df[[c for c in cols if c in sess.original_df.columns]]
+        return sess.original_df
+    return scoped_dataframe(sess)
+
 
 def _resolve_glossary(sess: SessionData, df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     """Find the best available AI-generated column classification.
@@ -345,18 +393,18 @@ def _resolve_cross_field_rules(sess: SessionData, df: pd.DataFrame) -> List[Dict
 
 @router.get("/executive-summary")
 def executive_summary(
+    source: str = Query("current", pattern="^(current|original)$"),
     sess: SessionData = Depends(require_dataframe),
     db: Session = Depends(get_db),
 ) -> dict:
     """DAMA-aligned scorecard: 6 dimensions + key stats + remediation actions.
 
-    Designed for the first tab of Data Profiling — a 30-second read of
-    where the data is sick. The scorer is fully AI-driven: per-column
-    classification flows from ``cde_meta`` produced by the CDE picker,
-    and master-data semantics (e.g. "identifier repetition is expected
-    for material masters") flow from the project's stream.
+    The ``source`` param selects the dataframe to score:
+      • ``original`` — baseline view used by Data Profiling and the
+        Initial Dashboard so their numbers always agree.
+      • ``current`` — live working state used by post-cleansing views.
     """
-    df = scoped_dataframe(sess)
+    df = _view_df(sess, source)
     glossary = _resolve_glossary(sess, df)
     project_context = _resolve_project_context(sess, db)
     cross_field_rules = _resolve_cross_field_rules(sess, df)
@@ -370,16 +418,12 @@ def executive_summary(
 
 @router.get("/completeness")
 def completeness(
+    source: str = Query("current", pattern="^(current|original)$"),
     sess: SessionData = Depends(require_dataframe),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Per-field fill-rate analysis (DAMA Completeness, reference Sheet 1).
-
-    Returns bucket summary + a sortable per-field table. Each field is
-    tagged with its AI-assigned ``semantic_type`` and CDE flag so the
-    picker UI can let stewards filter to "blanks on CDEs only".
-    """
-    df = scoped_dataframe(sess)
+    """Per-field fill-rate analysis (DAMA Completeness)."""
+    df = _view_df(sess, source)
     glossary = _resolve_glossary(sess, df)
     project_context = _resolve_project_context(sess, db)
     return compute_completeness_report(df, glossary=glossary, project_context=project_context)
@@ -387,17 +431,12 @@ def completeness(
 
 @router.get("/validation")
 def validation(
+    source: str = Query("current", pattern="^(current|original)$"),
     sess: SessionData = Depends(require_dataframe),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Per-attribute format Validation report (DAMA Validation, ref Sheet 2).
-
-    For every column the AI tagged with a known semantic_type (PAN /
-    GSTIN / Email / postal / ISO country / etc.), runs the canonical
-    regex against the actual values and returns valid / invalid / blank
-    counts plus up to 10 sample invalid rows.
-    """
-    df = scoped_dataframe(sess)
+    """Per-attribute format Validation report (DAMA Validation)."""
+    df = _view_df(sess, source)
     glossary = _resolve_glossary(sess, df)
     project_context = _resolve_project_context(sess, db)
     result = compute_validation_report(df, glossary=glossary, project_context=project_context)
@@ -407,41 +446,27 @@ def validation(
 
 @router.get("/uniqueness")
 def uniqueness(
+    source: str = Query("current", pattern="^(current|original)$"),
     sess: SessionData = Depends(require_dataframe),
     db: Session = Depends(get_db),
 ) -> dict:
-    """DAMA Uniqueness deep-dive (ref Sheet 3).
-
-    Returns four sections: record overview, composite-key duplicates,
-    shared-identifier risk (same PAN / GSTIN across multiple entity
-    rows), and per-column uniqueness rollup. Severity language adapts
-    to master-data stream — repetition is informational for Material /
-    GL / Cost Centre joined views, high-risk for Customer / Vendor /
-    Employee entity masters.
-    """
-    df = scoped_dataframe(sess)
+    """DAMA Uniqueness deep-dive."""
+    df = _view_df(sess, source)
     glossary = _resolve_glossary(sess, df)
     project_context = _resolve_project_context(sess, db)
     result = compute_uniqueness_report(df, glossary=glossary, project_context=project_context)
-    # Signal to the frontend that the AI hasn't classified columns yet —
-    # tells the drill-down to auto-trigger regeneration before giving up.
     result["needs_classification"] = glossary is None
     return result
 
 
 @router.get("/standardisation")
 def standardisation(
+    source: str = Query("current", pattern="^(current|original)$"),
     sess: SessionData = Depends(require_dataframe),
     db: Session = Depends(get_db),
 ) -> dict:
-    """DAMA Standardisation deep-dive (ref Sheet 4).
-
-    Case-pattern analysis per text column, fuzzy spelling-variant
-    clusters within a column, and whitespace / control-character
-    issues. Identifier-typed columns are excluded (their format is
-    Validation's territory).
-    """
-    df = scoped_dataframe(sess)
+    """DAMA Standardisation deep-dive."""
+    df = _view_df(sess, source)
     glossary = _resolve_glossary(sess, df)
     project_context = _resolve_project_context(sess, db)
     return compute_standardisation_report(df, glossary=glossary, project_context=project_context)
@@ -449,18 +474,12 @@ def standardisation(
 
 @router.get("/accuracy")
 def accuracy(
+    source: str = Query("current", pattern="^(current|original)$"),
     sess: SessionData = Depends(require_dataframe),
     db: Session = Depends(get_db),
 ) -> dict:
-    """DAMA Accuracy deep-dive (ref Sheet 5).
-
-    Per-rule pass / fail rollup of generated cross-field rules, with
-    sample failing examples and the underlying validation expression.
-    Returns ``needs_rules: true`` when no cross-field rules exist —
-    the frontend uses that to render a one-click "Run Rule Generator"
-    CTA instead of an empty table.
-    """
-    df = scoped_dataframe(sess)
+    """DAMA Accuracy deep-dive."""
+    df = _view_df(sess, source)
     glossary = _resolve_glossary(sess, df)
     project_context = _resolve_project_context(sess, db)
     return compute_accuracy_report(
@@ -473,19 +492,25 @@ def accuracy(
 
 @router.get("/quality-dashboard")
 def quality_dashboard(
+    source: str = Query("current", pattern="^(current|original)$"),
     sess: SessionData = Depends(require_dataframe),
     db: Session = Depends(get_db),
 ) -> dict:
     """Consolidated payload for the Data Quality Dashboard page.
 
-    Returns KPI counts, the six dimension scores, threshold-category
-    distribution, semantic-type distribution, per-dimension rule counts,
-    and the per-field score table — everything the dashboard renders in
-    one round-trip. All numbers flow from the existing scorers + cached
-    AI classification, so the dashboard never disagrees with the
-    profiling pages.
+    Two views over the same scoring code:
+
+      • ``source=current`` (default) — reads ``sess.df``, the live working
+        dataset. This is the **Final Dashboard** view shown after Cleansing
+        and Find Duplicates have run.
+      • ``source=original`` — reads ``sess.original_df``, the as-uploaded
+        baseline. This is the **Initial Dashboard** view — the steward's
+        starting picture of data quality before any cleansing.
+
+    Both views run through the same compute_quality_dashboard pipeline so
+    the side-by-side comparison is apples-to-apples.
     """
-    df = scoped_dataframe(sess)
+    df = _view_df(sess, source)
     glossary = _resolve_glossary(sess, df)
     project_context = _resolve_project_context(sess, db)
     cross_field_rules = _resolve_cross_field_rules(sess, df)
@@ -494,11 +519,8 @@ def quality_dashboard(
         cross_field_rules=cross_field_rules,
         project_context=project_context,
     )
-    # Pull the generated rules dataframe so dashboard rule counts match
-    # what the Rule Generator page shows (e.g. 108 of 108 rules) rather
-    # than being approximated from "fields where a dimension applies".
     ai_rules_df = getattr(sess, "ai_validation_rules", None)
-    return compute_quality_dashboard(
+    payload = compute_quality_dashboard(
         df,
         glossary=glossary,
         executive_summary=exec_summary,
@@ -506,22 +528,21 @@ def quality_dashboard(
         project_context=project_context,
         ai_rules_df=ai_rules_df,
     )
+    # Tag the response so the UI can render an appropriate header and
+    # warn if the steward navigates to the Final Dashboard before any
+    # cleansing has happened (current==original).
+    payload["source"] = source
+    return payload
 
 
 @router.get("/timeliness")
 def timeliness(
+    source: str = Query("current", pattern="^(current|original)$"),
     sess: SessionData = Depends(require_dataframe),
     db: Session = Depends(get_db),
 ) -> dict:
-    """DAMA Timeliness deep-dive.
-
-    Per-datetime-column analysis: populated / blank counts, oldest /
-    newest values, future-dated and very-old rows with samples, and
-    a per-column timeliness rate. Empty when the dataset has no
-    datetime columns — Timeliness is the only dimension that can
-    legitimately be N/A.
-    """
-    df = scoped_dataframe(sess)
+    """DAMA Timeliness deep-dive."""
+    df = _view_df(sess, source)
     glossary = _resolve_glossary(sess, df)
     project_context = _resolve_project_context(sess, db)
     return compute_timeliness_report(df, glossary=glossary, project_context=project_context)

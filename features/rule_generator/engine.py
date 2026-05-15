@@ -1103,12 +1103,51 @@ when the relationships genuinely span 3+ columns. Don't force it when only
 
 
 def _extract_allowed_values(rule_text: str) -> Optional[List[str]]:
-    """Parse 'must be one of: X, Y, Z' from a rule statement."""
-    m = re.search(r'must be one of[:\s]+(.+)', rule_text, re.IGNORECASE)
-    if not m:
-        return None
-    raw = m.group(1).strip().rstrip('.')
-    return [v.strip().strip("'\"") for v in re.split(r'[,;]', raw) if v.strip()]
+    """Parse a comma-separated allowed-values list from a rule statement.
+
+    Recognises several common phrasings:
+      • "must be one of: X, Y, Z"
+      • "must be one of the allowed values: X, Y, Z"
+      • "must be one of the following values: X, Y, Z"
+      • "must be one of X, Y, Z"
+      • "must be in the allowed list: X, Y, Z"
+      • "allowed values are X, Y, Z"
+
+    Critical for correctness: when there's prose between the trigger
+    phrase ("must be one of") and the colon, the values are AFTER the
+    colon — not the prose. The earlier implementation captured "the
+    allowed values: business_gst, business_none, overseas" and split it
+    on commas, producing ``["the allowed values: business_gst",
+    "business_none", "overseas"]`` and a broken regex that rejected
+    every actually-valid value.
+    """
+    rl = rule_text.lower()
+    # 1) Colon-anchored form is the most reliable — values follow ":".
+    #    Skip any prose between the trigger and the colon.
+    if "must be one of" in rl or "allowed values" in rl or "allowed list" in rl:
+        m = re.search(
+            r'(?:must be one of|allowed values?(?:\s+are)?|allowed list|one of the following)\b[^:\n]*:\s*(.+)',
+            rule_text,
+            re.IGNORECASE,
+        )
+        if m:
+            raw = m.group(1).strip().rstrip('.')
+            parts = [v.strip().strip("'\"") for v in re.split(r'[,;]', raw) if v.strip()]
+            return parts or None
+    # 2) Fallback: no colon, values follow "must be one of" directly.
+    #    "Status must be one of ACTIVE, INACTIVE, PENDING".
+    m = re.search(r'must be one of\s+([^.\n]+)', rule_text, re.IGNORECASE)
+    if m:
+        raw = m.group(1).strip().rstrip('.')
+        # Reject if the captured text starts with a "filler" phrase that
+        # really expected a colon — those are caught above; if they fell
+        # through, something is malformed and we'd produce garbage.
+        if re.match(r'(?:the\s+)?(?:allowed|following|valid|permitted|accepted|listed)\b',
+                    raw, re.IGNORECASE):
+            return None
+        parts = [v.strip().strip("'\"") for v in re.split(r'[,;]', raw) if v.strip()]
+        return parts or None
+    return None
 
 
 def _extract_max_chars(rule_text: str) -> Optional[int]:
@@ -1218,6 +1257,37 @@ def infer_regex_pattern_from_rule(dimension: str, rule_text: str) -> str:
         if "no special character" in rl:
             return r"^[A-Za-z0-9\s\-_.]+$"
 
+    # ── Well-known regulatory identifier formats — checked EARLY so a
+    # rule like "GSTIN must be alphanumeric with a length of 15 chars"
+    # gets the FULL GSTIN regex, not the generic exact-length fallback
+    # below. Without this, Cleansing was inferring ^.{15}$ (any 15-char
+    # string passes) while Profiling used the structural GSTIN regex —
+    # the same column was reported as both "0 failing" in Cleansing and
+    # "all invalid" in Profile drill-down. Same data, different verdict.
+    # Triggers are deliberately broad: when the rule MENTIONS the
+    # identifier name (gstin/pan/ifsc/etc.) we apply the canonical
+    # format, because that's overwhelmingly what the user wants.
+    if re.search(r"\bcin\b", rl):
+        return r"^[LUFTHGCK]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6}$"
+    if re.search(r"\bgst(in)?\b", rl):
+        return r"^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}Z[A-Z\d]{1}$"
+    if re.search(r"\bpan(\s+number)?\b", rl):
+        return r"^[A-Z]{5}\d{4}[A-Z]$"
+    if re.search(r"\bifsc\b", rl):
+        return r"^[A-Z]{4}0[A-Z0-9]{6}$"
+    if re.search(r"\beori\b", rl):
+        return r"^[A-Z]{2}[A-Za-z0-9]{1,15}$"
+    if re.search(r"\bduns\b", rl):
+        return r"^\d{9}$"
+    if re.search(r"\bein\b", rl):
+        return r"^\d{2}-\d{7}$"
+    if re.search(r"\baadhaar\b", rl):
+        return r"^\d{12}$"
+    if re.search(r"\biban\b", rl):
+        return r"^[A-Z]{2}\d{2}[A-Z0-9]{1,30}$"
+    if re.search(r"\bswift\b", rl) or re.search(r"\bbic\b", rl):
+        return r"^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$"
+
     # Max-length is checked BEFORE exact-length because phrases like
     # "maximum length of 255 characters" otherwise match the exact-length
     # regex below and produce ^.{255}$, rejecting every shorter value.
@@ -1277,12 +1347,63 @@ def infer_regex_pattern_from_rule(dimension: str, rule_text: str) -> str:
     if "valid string" in rl or "valid string format" in rl:
         return r"^(?=.*\S).*$"
 
-    if "email" in rl and "format" in rl:
+    # ── Email — broad catch for the LLM's many ways of saying "email" ──
+    # Old code required both "email" AND "format" literally; the LLM
+    # often writes "must satisfy the structural rules of a valid email
+    # address" / "valid email format" / "well-formed email" etc.
+    if "email" in rl and re.search(
+        r"\b(valid|format|address|structural|well[- ]formed|conform|standard|rfc)\b", rl
+    ):
         return r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
 
     # Lenient URL — covers http(s) and bare domain-only entries.
     if re.search(r"\bvalid\s+url\b", rl) or ("url" in rl and ("format" in rl or "string representing" in rl)):
         return r"^(https?://)?[A-Za-z0-9.\-]+\.[A-Za-z]{2,}([/?#].*)?$"
+
+    # ── Country — match "valid country", "country name", "country code",
+    # "ISO country", "country_code", "shipping_country" etc. The
+    # substring check ("country" in rl) intentionally also catches
+    # snake_case identifiers like ``country_code`` and ``shipping_country``
+    # where a strict \bcountry\b would fail (underscore counts as a
+    # word char in regex). The required trigger-word context disambiguates.
+    if "country" in rl and re.search(
+        r"\b(valid|code|name|iso|alpha[- ]?2|alpha[- ]?3|format|standard|2[- ]?letter|3[- ]?letter)\b", rl
+    ):
+        return r"^[A-Za-z]{2,3}$"
+
+    # ── Currency — ISO 4217 3-letter codes (USD, EUR, INR …) ──
+    if "currency" in rl and re.search(
+        r"\b(valid|code|iso|3[- ]?letter|format|standard)\b", rl
+    ):
+        return r"^[A-Za-z]{3}$"
+
+    # ── Phone — international/E.164-ish (broad on purpose, real phone
+    # formats vary wildly across master-data systems). Same loose
+    # substring match so snake_case ``mobile_phone`` / ``contact_phone``
+    # also triggers.
+    if "phone" in rl and re.search(
+        r"\b(valid|format|number|e\.?\s?164|international|mobile)\b", rl
+    ):
+        return r"^[+\d][\d\s\-().]{5,20}$"
+
+    # ── Datetime / timestamp — the AI commonly writes "valid datetime
+    # value" / "valid timestamp" / "valid date or time". We accept the
+    # broad ISO-8601-ish shape so YYYY-MM-DD plain dates AND full
+    # YYYY-MM-DDTHH:MM:SS timestamps both pass.
+    if re.search(
+        r"\bvalid\s+(date[- ]?time|datetime|timestamp|date[/ ]time|time[/ ]stamp)\b", rl
+    ) or re.search(r"\b(date[- ]?time|timestamp)\s+(value|format)\b", rl):
+        return (
+            r"^\d{4}-\d{2}-\d{2}"
+            r"([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?"
+            r"(Z|[+-]\d{2}:?\d{2})?)?$"
+        )
+
+    # ── Plain date (no time) — "valid date" / "must be a date" — when
+    # the AI doesn't specify YYYY-MM-DD explicitly, default to ISO 8601
+    # date-only since that's the canonical machine format.
+    if re.search(r"\bvalid\s+date\b", rl) or re.search(r"\bmust\s+be\s+(a\s+)?date\b", rl):
+        return r"^\d{4}-\d{2}-\d{2}$"
 
     if re.search(r"\bdd-mm-yyyy\b", rl, re.IGNORECASE):
         return r"^\d{2}-\d{2}-\d{4}$"
@@ -1300,24 +1421,9 @@ def infer_regex_pattern_from_rule(dimension: str, rule_text: str) -> str:
     ) and "not uppercase" not in rl:
         return r"^[^a-z]*$"
 
-    # Known well-known formats — CIN (Indian Corporate ID), GSTIN, PAN,
-    # IFSC, EORI etc. The LLM-driven rule generator often emits prose
-    # like "CIN must satisfy structural rules" instead of repeating the
-    # pattern; resolve those mechanically here.
-    if re.search(r"\bcin\b", rl) and ("structural" in rl or "valid" in rl or "format" in rl):
-        return r"^[LUFTHGCK]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6}$"
-    if re.search(r"\bgst(in)?\b", rl) and ("valid" in rl or "format" in rl):
-        return r"^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}Z[A-Z\d]{1}$"
-    if re.search(r"\bpan\b", rl) and ("valid" in rl or "format" in rl):
-        return r"^[A-Z]{5}\d{4}[A-Z]$"
-    if re.search(r"\bifsc\b", rl) and ("valid" in rl or "format" in rl):
-        return r"^[A-Z]{4}0[A-Z0-9]{6}$"
-    if re.search(r"\beori\b", rl) and ("valid" in rl or "structural" in rl or "format" in rl):
-        return r"^[A-Z]{2}[A-Za-z0-9]{1,15}$"
-    if re.search(r"\bduns\b", rl) and ("valid" in rl or "format" in rl):
-        return r"^\d{9}$"
-    if re.search(r"\bein\b", rl) and ("valid" in rl or "format" in rl or "digit" in rl):
-        return r"^\d{2}-\d{7}$"
+    # (Well-known identifier formats — CIN/GSTIN/PAN/IFSC/EORI/DUNS/EIN/
+    # Aadhaar/IBAN/SWIFT — are checked EARLY at the top of this function
+    # so they take priority over the generic exact-length fallback.)
 
     return ""
 

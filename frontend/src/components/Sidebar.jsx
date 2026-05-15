@@ -30,10 +30,10 @@ export const STAGES = [
     section: 'PROFILE',
     steps: [
       { key: 'profile', label: 'Data profiling', icon: InsightsOutlinedIcon },
-      // Dashboard sits AFTER profiling — it's a consumer of the
+      // Initial Dashboard sits AFTER profiling — it's a consumer of the
       // assessment, so navigating to it before scores exist makes no
-      // sense. The new order matches the steward's actual workflow.
-      { key: 'dashboard', label: 'Dashboard', icon: DashboardOutlinedIcon },
+      // sense. Shows the dataset as uploaded (baseline view).
+      { key: 'dashboard', label: 'Initial dashboard', icon: DashboardOutlinedIcon },
     ],
   },
   {
@@ -42,6 +42,10 @@ export const STAGES = [
       { key: 'rules', label: 'Rule generator', icon: AutoFixHighOutlinedIcon },
       { key: 'quality', label: 'Cleansing', icon: VerifiedOutlinedIcon },
       { key: 'dupes', label: 'Find duplicates', icon: ContentCopyOutlinedIcon },
+      // Final Dashboard renders the same payload computed against the
+      // cleansed + de-duplicated working df, so the steward can compare
+      // baseline-to-outcome without leaving the pipeline.
+      { key: 'final-dashboard', label: 'Final dashboard', icon: DashboardOutlinedIcon },
     ],
   },
   {

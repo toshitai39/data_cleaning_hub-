@@ -289,7 +289,10 @@ def remove_fuzzy_group(
         strategy_msg = "kept first (default)"
 
     if drop_indices:
-        sess.df = df.drop(drop_indices).reset_index(drop=True)
+        # Preserve pandas index labels — Compare aligns rows by identity,
+        # not position. Reset-index here would silently corrupt the diff
+        # (rows appear "Modified" instead of "Removed").
+        sess.df = df.drop(drop_indices)
         rows_removed = len(drop_indices)
         sess.fixes_applied.append({
             "type": "remove_fuzzy_group",
@@ -306,7 +309,8 @@ def remove_exact(sess: SessionData, subset: Optional[List[str]] = None,
     """Wraps the original transform_remove_exact_duplicates."""
     df = sess.df
     before = len(df)
-    sess.df = df.drop_duplicates(subset=subset if subset else None, keep=keep).reset_index(drop=True)
+    # Preserve pandas index labels (Compare aligns by identity, not position).
+    sess.df = df.drop_duplicates(subset=subset if subset else None, keep=keep)
     removed = before - len(sess.df)
     sess.fixes_applied.append({
         "type": "remove_exact_duplicates",

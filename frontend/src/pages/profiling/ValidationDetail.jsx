@@ -9,6 +9,7 @@ import SearchIcon from '@mui/icons-material/Search';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import api from '../../api.js';
+import { useDataset } from '../../context/DatasetContext.jsx';
 
 const STATUS_TONE = (rate) => {
   if (rate >= 0.99) return { fg: '#0E5226', bg: '#DCFCE7', label: 'Strong' };
@@ -34,6 +35,7 @@ function ValidityBar({ valid, invalid, blank, total }) {
 
 
 export default function ValidationDetail() {
+  const { state } = useDataset();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
@@ -46,7 +48,7 @@ export default function ValidationDetail() {
     setLoading(true);
     setErr('');
     try {
-      const { data } = await api.get('/profile/validation');
+      const { data } = await api.get('/profile/validation', { params: { source: 'current' } });
       setData(data);
     } catch (e) {
       setErr(e?.response?.data?.detail || 'Failed to compute validation');
@@ -80,7 +82,7 @@ export default function ValidationDetail() {
     (async () => {
       setLoading(true);
       try {
-        const { data } = await api.get('/profile/validation');
+        const { data } = await api.get('/profile/validation', { params: { source: 'current' } });
         if (cancelled) return;
         setData(data);
         // Backend tells us no glossary exists yet → silently trigger the
@@ -98,7 +100,7 @@ export default function ValidationDetail() {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [state.operations]);
 
   const fields = useMemo(() => {
     const all = data?.fields || [];

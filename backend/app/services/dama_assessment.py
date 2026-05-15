@@ -46,9 +46,19 @@ def _risk(score: float) -> str:
 # job of the AI recommender (`cde_recommender.generate_cde_meta`); this
 # table only knows how to *check* a value once the type is known.
 
+# GSTIN regex below was previously 16 chars long (had an extra ``\d``
+# group between the PAN's last letter and ``[A-Z\d]Z``). That meant
+# every valid 15-character GSTIN — including correctly-formed values
+# like ``27ABCDE1234F1Z5`` — was being flagged invalid by the
+# Validation drill-down, while Cleansing said the same rows passed.
+# Same data, opposite verdicts.
+#
+# Correct GSTIN structure (15 chars total):
+#   2 state digits + 10-char PAN ([A-Z]{5}\d{4}[A-Z]) +
+#   1 entity char ([A-Z\d]) + literal 'Z' + 1 check char ([A-Z\d])
 _FORMAT_CHECKS: Dict[str, re.Pattern] = {
     "pan":          re.compile(r"^[A-Z]{5}\d{4}[A-Z]$"),
-    "gstin":        re.compile(r"^\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z\d]Z[A-Z\d]$"),
+    "gstin":        re.compile(r"^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d]$"),
     "tan":          re.compile(r"^[A-Z]{4}\d{5}[A-Z]$"),
     "cin":          re.compile(r"^[LUu]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6}$"),
     "ein":          re.compile(r"^\d{2}-?\d{7}$"),

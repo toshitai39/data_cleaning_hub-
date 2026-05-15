@@ -633,7 +633,7 @@ function Panel({ title, subtitle, children, action }) {
 
 // ─── Main page ────────────────────────────────────────────────────
 
-export default function Dashboard() {
+export default function Dashboard({ variant = 'initial' }) {
   const { state } = useDataset();
   const [data, setData] = useState(null);
   const [err, setErr] = useState('');
@@ -641,17 +641,21 @@ export default function Dashboard() {
   const [search, setSearch] = useState('');
   const [thresholdFilter, setThresholdFilter] = useState('all');
 
+  // 'initial' → as-uploaded baseline (sess.original_df)
+  // 'final'   → post-cleansing + post-dedup current state (sess.df)
+  const source = variant === 'final' ? 'current' : 'original';
+
   useEffect(() => {
     if (!state.loaded) return;
     let cancelled = false;
     setLoading(true);
     api
-      .get('/profile/quality-dashboard')
+      .get('/profile/quality-dashboard', { params: { source } })
       .then(({ data }) => { if (!cancelled) setData(data); })
       .catch((e) => { if (!cancelled) setErr(e?.response?.data?.detail || 'Dashboard load failed'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [state.loaded, state.operations]);
+  }, [state.loaded, state.operations, source]);
 
   const fieldsView = useMemo(() => {
     const fields = data?.per_field || [];
@@ -669,10 +673,16 @@ export default function Dashboard() {
     return base;
   }, [data, search, thresholdFilter]);
 
+  const isFinal = variant === 'final';
+  const headerTitle = isFinal ? 'Final Data Quality Dashboard' : 'Initial Data Quality Dashboard';
+  const headerSubtitle = isFinal
+    ? 'Executive outlook AFTER cleansing + duplicate resolution — the outcome view.'
+    : 'Executive outlook of the dataset as uploaded — the baseline view, before any cleansing.';
+
   if (!state.loaded) {
     return (
       <>
-        <PageHeader title="Data Quality Dashboard" subtitle="Cross-dimensional executive view of your critical data elements." />
+        <PageHeader title={headerTitle} subtitle={headerSubtitle} />
         <EmptyState />
       </>
     );
@@ -687,9 +697,18 @@ export default function Dashboard() {
   return (
     <Box sx={{ pb: 4 }}>
       <PageHeader
-        title="Data Quality Dashboard"
-        subtitle="Executive outlook — fed live from the profiling assessment."
+        title={headerTitle}
+        subtitle={headerSubtitle}
       />
+      {isFinal && (
+        <Alert
+          severity="info"
+          sx={{ mb: 2, border: '1px solid #BFDBFE', bgcolor: '#EFF6FF' }}
+        >
+          This dashboard reflects the dataset <b>after</b> Cleansing and Find Duplicates.
+          Compare with the <b>Initial Dashboard</b> to see the impact of your rules.
+        </Alert>
+      )}
 
       {/* HERO STRIP */}
       <Grid container spacing={1.5} sx={{ mb: 2 }}>

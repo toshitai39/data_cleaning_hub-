@@ -335,7 +335,13 @@ def apply_column_rules(sess: SessionData, column: str) -> Tuple[int, int]:
                     rejected["Rejected_Column"] = column
                     rejected["Rejected_At"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     rejected_rows.append(rejected)
-                    sess.df = sess.df[~invalid_mask].reset_index(drop=True)
+                    # IMPORTANT: do NOT reset_index. The pandas index is
+                    # the row identity Compare uses to align before/after
+                    # views. Reset-index loses that — every surviving row
+                    # would line up against a different original row and
+                    # appear "Modified" instead of "the row that came
+                    # before was Removed".
+                    sess.df = sess.df[~invalid_mask]
             elif mode == "Validate":
                 invalid_mask = ~col_data.str.match(rule["pattern"], na=False)
                 if invalid_mask.any():
@@ -344,7 +350,13 @@ def apply_column_rules(sess: SessionData, column: str) -> Tuple[int, int]:
                     rejected["Rejected_Column"] = column
                     rejected["Rejected_At"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     rejected_rows.append(rejected)
-                    sess.df = sess.df[~invalid_mask].reset_index(drop=True)
+                    # IMPORTANT: do NOT reset_index. The pandas index is
+                    # the row identity Compare uses to align before/after
+                    # views. Reset-index loses that — every surviving row
+                    # would line up against a different original row and
+                    # appear "Modified" instead of "the row that came
+                    # before was Removed".
+                    sess.df = sess.df[~invalid_mask]
             elif mode == "Case":
                 if rule["case"] == "UPPERCASE":
                     sess.df[column] = col_data.str.upper()
@@ -371,7 +383,13 @@ def apply_column_rules(sess: SessionData, column: str) -> Tuple[int, int]:
                     rejected["Rejected_Column"] = column
                     rejected["Rejected_At"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     rejected_rows.append(rejected)
-                    sess.df = sess.df[~invalid_mask].reset_index(drop=True)
+                    # IMPORTANT: do NOT reset_index. The pandas index is
+                    # the row identity Compare uses to align before/after
+                    # views. Reset-index loses that — every surviving row
+                    # would line up against a different original row and
+                    # appear "Modified" instead of "the row that came
+                    # before was Removed".
+                    sess.df = sess.df[~invalid_mask]
         except Exception:
             continue
 

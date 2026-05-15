@@ -10,7 +10,6 @@ import PlayArrowOutlinedIcon from '@mui/icons-material/PlayArrowOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
-import ReportProblemOutlinedIcon from '@mui/icons-material/ReportProblemOutlined';
 import api from '../../api.js';
 
 // Status palette — calm, low-saturation neutrals so the eye reads the
@@ -65,8 +64,6 @@ export default function DimensionTab({ dimension, data, onAfterChange }) {
   const [filter, setFilter] = useState('actionable');
   const [previewKey, setPreviewKey] = useState(null);
   const [previewData, setPreviewData] = useState(null);
-  const [failingRowsFor, setFailingRowsFor] = useState(null);
-  const [failingRowsData, setFailingRowsData] = useState(null);
 
   // Derive counts/rules safely — data may be null until first fetch.
   const counts = data?.counts || {};
@@ -144,25 +141,6 @@ export default function DimensionTab({ dimension, data, onAfterChange }) {
       onAfterChange?.();
     } catch (e) {
       setErr(e?.response?.data?.detail || 'Apply failed');
-    } finally { setBusy(false); }
-  };
-
-  const showFailingRows = async (rule) => {
-    setBusy(true); setErr('');
-    setFailingRowsFor({ column: rule.column, rule_text: rule.rule_text || rule.name });
-    setFailingRowsData(null);
-    try {
-      const { data: r } = await api.post('/quality/failing-rows', {
-        column: rule.column,
-        rule_text: rule.rule_text || rule.name || '',
-        regex_pattern: rule.pattern || '',
-        dimension,
-        limit: 20,
-      });
-      setFailingRowsData(r);
-    } catch (e) {
-      setErr(e?.response?.data?.detail || 'Could not fetch failing rows');
-      setFailingRowsFor(null);
     } finally { setBusy(false); }
   };
 
@@ -347,17 +325,10 @@ export default function DimensionTab({ dimension, data, onAfterChange }) {
                     <Stack direction="row" spacing={0.5} alignItems="center" justifyContent="flex-end">
                       {r.status === 'actionable' && (
                         <>
-                          <Tooltip title="Preview sample rows">
+                          <Tooltip title="Preview the failing rows">
                             <span>
                               <IconButton size="small" onClick={() => previewRule(r)} disabled={busy}>
                                 <VisibilityOutlinedIcon sx={{ fontSize: 16 }} />
-                              </IconButton>
-                            </span>
-                          </Tooltip>
-                          <Tooltip title="View failing rows">
-                            <span>
-                              <IconButton size="small" onClick={() => showFailingRows(r)} disabled={busy}>
-                                <ReportProblemOutlinedIcon sx={{ fontSize: 16 }} />
                               </IconButton>
                             </span>
                           </Tooltip>
@@ -582,64 +553,6 @@ export default function DimensionTab({ dimension, data, onAfterChange }) {
         </Paper>
       )}
 
-      {/* Failing rows inspector */}
-      {failingRowsFor && (
-        <Paper variant="outlined" sx={{ mt: 2, p: 2 }}>
-          <Stack direction="row" alignItems="center" spacing={1.5} sx={{ mb: 1.5 }}>
-            <Typography sx={{ fontSize: 14, fontWeight: 700, flex: 1 }}>
-              Failing rows: {failingRowsFor.column}
-              <Typography component="span" sx={{ fontSize: 12, color: '#8A8A8A', ml: 1, fontWeight: 500 }}>
-                · {failingRowsFor.rule_text}
-              </Typography>
-            </Typography>
-            <Button size="small" onClick={() => { setFailingRowsFor(null); setFailingRowsData(null); }}>Close</Button>
-          </Stack>
-          <Divider sx={{ mb: 1.5 }} />
-          {!failingRowsData ? (
-            <LinearProgress />
-          ) : failingRowsData.manual ? (
-            <Alert severity="warning">{failingRowsData.message}</Alert>
-          ) : failingRowsData.total === 0 ? (
-            <Alert severity="success">{failingRowsData.message || 'No failing rows.'}</Alert>
-          ) : (
-            <>
-              <Alert severity="warning" sx={{ mb: 1.5 }}>
-                <b>{failingRowsData.total.toLocaleString()}</b> rows violate this rule
-                {failingRowsData.rows.length < failingRowsData.total && ` · showing first ${failingRowsData.rows.length}`}.
-              </Alert>
-              <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 360 }}>
-                <Table size="small" stickyHeader>
-                  <TableHead>
-                    <TableRow>
-                      {Object.keys(failingRowsData.rows[0] || {}).map((c) => (
-                        <TableCell key={c} sx={{ fontWeight: 700, fontSize: '0.72rem' }}>{c}</TableCell>
-                      ))}
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {failingRowsData.rows.map((r, i) => (
-                      <TableRow key={i}>
-                        {Object.entries(r).map(([k, v]) => (
-                          <TableCell
-                            key={k}
-                            sx={{
-                              fontFamily: 'ui-monospace, Menlo, monospace',
-                              fontSize: '0.72rem',
-                              bgcolor: k === failingRowsFor.column ? '#fef2f2' : 'transparent',
-                            }}
-                          >
-                            {String(v ?? '')}
-                          </TableCell>
-                        ))}
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            </>
-          )}
-        </Paper>
-      )}
     </Box>
   );
 }

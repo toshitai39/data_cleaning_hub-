@@ -6,6 +6,7 @@ import {
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import api from '../../api.js';
+import { useDataset } from '../../context/DatasetContext.jsx';
 
 function MetricBlock({ label, value, accent }) {
   return (
@@ -25,6 +26,7 @@ function MetricBlock({ label, value, accent }) {
 }
 
 export default function TimelinessDetail() {
+  const { state } = useDataset();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
@@ -33,12 +35,12 @@ export default function TimelinessDetail() {
     let cancelled = false;
     setLoading(true);
     api
-      .get('/profile/timeliness')
+      .get('/profile/timeliness', { params: { source: 'current' } })
       .then(({ data }) => { if (!cancelled) setData(data); })
       .catch((e) => { if (!cancelled) setErr(e?.response?.data?.detail || 'Failed to compute timeliness'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, []);
+  }, [state.operations]);
 
   if (loading) return <LinearProgress />;
   if (err) return <Alert severity="error">{err}</Alert>;

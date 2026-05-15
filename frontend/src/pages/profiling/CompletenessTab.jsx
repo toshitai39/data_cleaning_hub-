@@ -7,6 +7,7 @@ import {
 import SearchIcon from '@mui/icons-material/Search';
 import StarOutlineRoundedIcon from '@mui/icons-material/StarOutlineRounded';
 import api from '../../api.js';
+import { useDataset } from '../../context/DatasetContext.jsx';
 
 const STATUS_STYLE = {
   Complete:    { fg: '#0E5226', bg: '#DCFCE7' },
@@ -82,6 +83,7 @@ function FillBar({ pct, status }) {
 
 
 export default function CompletenessTab() {
+  const { state } = useDataset();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
@@ -92,13 +94,17 @@ export default function CompletenessTab() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    // source=current → reflects post-cleansing state. The dep on
+    // state.operations re-fires this effect every time Cleansing /
+    // Find Duplicates / Reset mutates the working df, so the drill-
+    // down never lags behind the top scorecard.
     api
-      .get('/profile/completeness')
+      .get('/profile/completeness', { params: { source: 'current' } })
       .then(({ data }) => { if (!cancelled) setData(data); })
       .catch((e) => { if (!cancelled) setErr(e?.response?.data?.detail || 'Failed to compute completeness'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, []);
+  }, [state.operations]);
 
   const fields = useMemo(() => {
     const all = data?.fields || [];

@@ -1,91 +1,210 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Box, Grid, Paper, Typography, Stack, Button, Alert, LinearProgress,
+  Box, Grid, Paper, Typography, Stack, Button, Alert, LinearProgress, Chip,
   TextField, MenuItem, OutlinedInput, FormControl, InputLabel, Select,
-  Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Divider,
+  Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
+  ToggleButton, ToggleButtonGroup, Tooltip, IconButton, Collapse,
 } from '@mui/material';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
+import TuneIcon from '@mui/icons-material/Tune';
 import api from '../api.js';
 import PageHeader from '../components/PageHeader.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import { useDataset } from '../context/DatasetContext.jsx';
 
-// 1:1 colour palette from features/compare/ui.py
-const COLORS = {
-  modified: '#fef3c7',  // yellow
-  added:    '#d1fae5',  // green
-  removed:  '#fee2e2',  // red
+// Calm, low-saturation palette — readable, client-grade.
+const TONE = {
+  modified: { bg: '#fef9c3', fg: '#854d0e' },   // amber
+  added:    { bg: '#dcfce7', fg: '#166534' },   // emerald
+  removed:  { bg: '#fee2e2', fg: '#991b1b' },   // rose
+  neutral:  { bg: '#f1f5f9', fg: '#475569' },   // slate
 };
 
-function StatItem({ label, value, sign = false }) {
-  let color = '#1f2937';
-  if (sign && typeof value === 'number') {
-    if (value > 0) color = '#10b981';
-    else if (value < 0) color = '#ef4444';
-  }
-  const display = sign && typeof value === 'number'
-    ? `${value > 0 ? '+' : ''}${value.toLocaleString()}`
-    : (typeof value === 'number' ? value.toLocaleString() : value);
+const CHANGE_TYPE_TONE = {
+  'Standardised':           { bg: '#e0e7ff', fg: '#3730a3' },
+  'Standardised (mostly)':  { bg: '#e0e7ff', fg: '#3730a3' },
+  'Cleared':                { bg: '#fef2f2', fg: '#b91c1c' },
+  'Backfilled':             { bg: '#f0fdf4', fg: '#15803d' },
+  'Modified':               { bg: '#fef9c3', fg: '#854d0e' },
+};
+
+
+function HeroKPI({ label, value, sub, accent }) {
   return (
-    <Box sx={{ textAlign: 'center', flex: 1, minWidth: 110 }}>
-      <Typography variant="caption" sx={{
-        color: '#6b7280', textTransform: 'uppercase', letterSpacing: 0.5, fontSize: '0.72rem',
-      }}>{label}</Typography>
-      <Typography sx={{ fontSize: '1.4rem', fontWeight: 700, color, mt: 0.25 }}>
-        {display}
+    <Paper variant="outlined" sx={{
+      p: 2, borderRadius: 2,
+      bgcolor: accent ? '#FAFAFA' : '#FFFFFF',
+      borderLeft: accent ? `3px solid ${accent}` : undefined,
+    }}>
+      <Typography sx={{
+        fontSize: 10.5, fontWeight: 700, letterSpacing: '0.10em',
+        color: '#8A8A8A', textTransform: 'uppercase', mb: 0.5,
+      }}>
+        {label}
       </Typography>
-    </Box>
+      <Typography sx={{
+        fontFamily: "'Montserrat', sans-serif",
+        fontSize: 26, fontWeight: 700, color: '#1A1A1A', lineHeight: 1.1,
+        fontVariantNumeric: 'tabular-nums',
+      }}>
+        {value}
+      </Typography>
+      {sub && (
+        <Typography sx={{ fontSize: 11.5, color: '#6B7280', mt: 0.5 }}>
+          {sub}
+        </Typography>
+      )}
+    </Paper>
   );
 }
 
-function DiffPanel({ title, accent, columns, rows, side, isFlagged }) {
-  // side: 'original' | 'modified' — picks which column of the diff row to render
+
+function buildNarrative(stats, byCol) {
+  if (!stats) return '';
+  const removed = stats.original_rows - stats.modified_rows;
+  const cdeTouched = byCol?.cdes_touched || 0;
+  const cellsChanged = byCol?.total_modified_cells || stats.modified_cells || 0;
+  const topCol = (byCol?.columns || [])[0];
+
+  if (removed === 0 && cellsChanged === 0) {
+    return 'No changes have been applied yet — the working dataset is identical to the original.';
+  }
+
+  const parts = [];
+  if (removed > 0) {
+    parts.push(`removed ${removed.toLocaleString()} row${removed === 1 ? '' : 's'}`);
+  }
+  if (cellsChanged > 0) {
+    parts.push(`modified ${cellsChanged.toLocaleString()} cell${cellsChanged === 1 ? '' : 's'} across ${cdeTouched} CDE${cdeTouched === 1 ? '' : 's'}`);
+  }
+  let s = `Cleansing ${parts.join(' and ')}.`;
+  if (topCol) {
+    s += ` The largest impact is on ${topCol.column} (${topCol.changed.toLocaleString()} ${topCol.change_type.toLowerCase()}).`;
+  }
+  return s;
+}
+
+
+function ChangeLedger({ byCol }) {
+  const [expanded, setExpanded] = useState({});
+  if (!byCol || !byCol.columns || byCol.columns.length === 0) {
+    return null;
+  }
   return (
-    <Paper sx={{ borderLeft: `4px solid ${accent}`, p: 2, height: '100%' }}>
-      <Typography sx={{
-        fontSize: '1rem', fontWeight: 700, mb: 1.5, pb: 1,
-        borderBottom: '2px solid #e5e7eb', letterSpacing: 0.5,
+    <Paper variant="outlined" sx={{ mb: 2.5 }}>
+      <Box sx={{
+        px: 2.5, py: 1.5, borderBottom: '1px solid #E5E7EB',
+        display: 'flex', alignItems: 'baseline', gap: 1,
       }}>
-        {title}
-      </Typography>
-      <TableContainer sx={{ maxHeight: 600 }}>
-        <Table size="small" stickyHeader>
+        <Typography sx={{ fontSize: 15, fontWeight: 700, color: '#1A1A1A' }}>
+          What changed, by Critical Data Element
+        </Typography>
+        <Typography sx={{ fontSize: 12, color: '#6B7280' }}>
+          ({byCol.columns.length} CDE{byCol.columns.length === 1 ? '' : 's'} touched)
+        </Typography>
+      </Box>
+      <TableContainer>
+        <Table size="small">
           <TableHead>
-            <TableRow>
-              <TableCell sx={{ fontWeight: 600, bgcolor: '#FBFAFC', width: 60 }}>Row</TableCell>
-              {columns.map((c) => (
-                <TableCell key={c} sx={{ fontWeight: 600, bgcolor: '#FBFAFC' }}>{c}</TableCell>
-              ))}
+            <TableRow sx={{ '& th': { bgcolor: '#FAFAFA', fontWeight: 700,
+              fontSize: '0.7rem', color: '#6B7280', textTransform: 'uppercase',
+              letterSpacing: '0.08em' } }}>
+              <TableCell sx={{ width: 36 }} />
+              <TableCell>Critical Data Element</TableCell>
+              <TableCell>Change type</TableCell>
+              <TableCell align="right">Cells changed</TableCell>
+              <TableCell>Breakdown</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {rows.map((r) => {
-              const data = r[side];
-              // Determine row-level styling
-              let rowBg = 'inherit';
-              if (side === 'original' && r.row_status === 'removed') rowBg = COLORS.removed;
-              if (side === 'modified' && r.row_status === 'added') rowBg = COLORS.added;
+            {byCol.columns.map((c) => {
+              const tone = CHANGE_TYPE_TONE[c.change_type] || TONE.neutral;
+              const isOpen = !!expanded[c.column];
               return (
-                <TableRow key={r.row_index} sx={{ bgcolor: rowBg }}>
-                  <TableCell sx={{ color: '#64748b', fontWeight: 600 }}>{r.row_index}</TableCell>
-                  {columns.map((c) => {
-                    let cellBg = 'inherit';
-                    let cellWeight = 'normal';
-                    // Cell-level highlighting only on the modified panel for "modified" cells.
-                    if (side === 'modified' && isFlagged(r, c)) {
-                      cellBg = COLORS.modified; cellWeight = 700;
-                    }
-                    const v = data ? data[c] : null;
-                    return (
-                      <TableCell key={c} sx={{
-                        bgcolor: cellBg, fontWeight: cellWeight,
-                        fontFamily: 'monospace', fontSize: '0.78rem',
-                      }}>
-                        {data == null ? '' : (v == null ? '' : String(v))}
-                      </TableCell>
-                    );
-                  })}
-                </TableRow>
+                <>
+                  <TableRow key={c.column} hover sx={{
+                    '& td': { borderBottom: isOpen ? 'none' : '1px solid #F1F1F1' },
+                  }}>
+                    <TableCell>
+                      <IconButton size="small" onClick={() =>
+                        setExpanded((p) => ({ ...p, [c.column]: !p[c.column] }))}>
+                        {isOpen ? <KeyboardArrowUpIcon fontSize="small" /> : <KeyboardArrowDownIcon fontSize="small" />}
+                      </IconButton>
+                    </TableCell>
+                    <TableCell sx={{ fontFamily: 'ui-monospace, Menlo, monospace',
+                      fontSize: '0.82rem', fontWeight: 600 }}>
+                      {c.column}
+                    </TableCell>
+                    <TableCell>
+                      <Chip size="small" label={c.change_type}
+                        sx={{ height: 22, fontSize: '0.7rem', fontWeight: 700,
+                          bgcolor: tone.bg, color: tone.fg }} />
+                    </TableCell>
+                    <TableCell align="right" sx={{
+                      fontVariantNumeric: 'tabular-nums', fontWeight: 600,
+                    }}>
+                      {c.changed.toLocaleString()}
+                    </TableCell>
+                    <TableCell sx={{ fontSize: '0.8rem', color: '#475569' }}>
+                      {c.standardised > 0 && <span>std: {c.standardised}  ·  </span>}
+                      {c.nulled > 0 && <span>cleared: {c.nulled}  ·  </span>}
+                      {c.filled > 0 && <span>backfilled: {c.filled}  ·  </span>}
+                      {(c.changed - c.standardised - c.nulled - c.filled) > 0 && (
+                        <span>other: {c.changed - c.standardised - c.nulled - c.filled}</span>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                  <TableRow key={`${c.column}-detail`}>
+                    <TableCell colSpan={5} sx={{ p: 0, border: 0 }}>
+                      <Collapse in={isOpen}>
+                        <Box sx={{ bgcolor: '#FAFAFA', px: 3, py: 1.5,
+                          borderTop: '1px solid #F1F1F1', borderBottom: '1px solid #F1F1F1' }}>
+                          <Typography sx={{ fontSize: 11, fontWeight: 700,
+                            color: '#6B7280', textTransform: 'uppercase',
+                            letterSpacing: '0.08em', mb: 1 }}>
+                            Sample changes (showing {c.samples.length})
+                          </Typography>
+                          <Table size="small">
+                            <TableHead>
+                              <TableRow sx={{ '& th': { fontSize: '0.7rem',
+                                fontWeight: 700, color: '#6B7280' } }}>
+                                <TableCell sx={{ width: 80 }}>Row</TableCell>
+                                <TableCell>Before</TableCell>
+                                <TableCell>After</TableCell>
+                              </TableRow>
+                            </TableHead>
+                            <TableBody>
+                              {c.samples.map((s, i) => (
+                                <TableRow key={i}>
+                                  <TableCell sx={{ color: '#6B7280',
+                                    fontVariantNumeric: 'tabular-nums' }}>
+                                    {s.row}
+                                  </TableCell>
+                                  <TableCell sx={{ fontFamily: 'ui-monospace, Menlo, monospace',
+                                    fontSize: '0.75rem', bgcolor: TONE.removed.bg,
+                                    color: TONE.removed.fg, maxWidth: 360,
+                                    whiteSpace: 'nowrap', overflow: 'hidden',
+                                    textOverflow: 'ellipsis' }}>
+                                    {String(s.before ?? '')}
+                                  </TableCell>
+                                  <TableCell sx={{ fontFamily: 'ui-monospace, Menlo, monospace',
+                                    fontSize: '0.75rem', bgcolor: TONE.added.bg,
+                                    color: TONE.added.fg, maxWidth: 360,
+                                    whiteSpace: 'nowrap', overflow: 'hidden',
+                                    textOverflow: 'ellipsis' }}>
+                                    {String(s.after ?? '')}
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </Box>
+                      </Collapse>
+                    </TableCell>
+                  </TableRow>
+                </>
               );
             })}
           </TableBody>
@@ -95,39 +214,191 @@ function DiffPanel({ title, accent, columns, rows, side, isFlagged }) {
   );
 }
 
-function Legend() {
+
+function UnifiedDiffTable({ rows, columns, isFlagged, onlyChanged }) {
+  const filteredRows = useMemo(() => {
+    if (!onlyChanged) return rows;
+    return rows.filter((r) => {
+      if (r.row_status === 'added' || r.row_status === 'removed') return true;
+      return columns.some((c) => isFlagged(r, c));
+    });
+  }, [rows, columns, isFlagged, onlyChanged]);
+
+  if (filteredRows.length === 0) {
+    return (
+      <Alert severity="info" sx={{ mt: 2 }}>
+        {onlyChanged
+          ? 'No changed rows in the current window. Toggle off "Show only changed rows" to see all.'
+          : 'No rows in the current window.'}
+      </Alert>
+    );
+  }
+
   return (
-    <Box sx={{
-      mt: 2.5, p: 2, bgcolor: '#f9fafb', borderRadius: 2,
-      display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap',
-    }}>
-      <Typography sx={{ fontWeight: 700 }}>Legend:</Typography>
-      <Box sx={{ px: 1.5, py: 0.5, bgcolor: COLORS.modified, borderRadius: 1 }}>Modified Value</Box>
-      <Box sx={{ px: 1.5, py: 0.5, bgcolor: COLORS.added, borderRadius: 1 }}>New Row</Box>
-      <Box sx={{ px: 1.5, py: 0.5, bgcolor: COLORS.removed, borderRadius: 1 }}>Removed Row</Box>
-    </Box>
+    <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 600 }}>
+      <Table size="small" stickyHeader>
+        <TableHead>
+          <TableRow>
+            <TableCell sx={{
+              width: 70, fontWeight: 700, fontSize: '0.7rem',
+              color: '#6B7280', textTransform: 'uppercase',
+              letterSpacing: '0.08em', bgcolor: '#FAFAFA',
+              position: 'sticky', left: 0, zIndex: 3,
+            }}>
+              Row
+            </TableCell>
+            <TableCell sx={{
+              width: 90, fontWeight: 700, fontSize: '0.7rem',
+              color: '#6B7280', textTransform: 'uppercase',
+              letterSpacing: '0.08em', bgcolor: '#FAFAFA',
+            }}>
+              Status
+            </TableCell>
+            {columns.map((c) => (
+              <TableCell key={c} sx={{
+                fontWeight: 700, fontSize: '0.7rem',
+                color: '#6B7280', textTransform: 'uppercase',
+                letterSpacing: '0.08em', bgcolor: '#FAFAFA',
+              }}>
+                {c}
+              </TableCell>
+            ))}
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {filteredRows.map((r) => {
+            let statusChip = null;
+            if (r.row_status === 'added') statusChip = { label: 'Added', tone: TONE.added };
+            else if (r.row_status === 'removed') statusChip = { label: 'Removed', tone: TONE.removed };
+            else if (columns.some((c) => isFlagged(r, c))) {
+              statusChip = { label: 'Changed', tone: TONE.modified };
+            } else {
+              statusChip = { label: 'Unchanged', tone: TONE.neutral };
+            }
+            return (
+              <TableRow key={r.row_index} hover>
+                <TableCell sx={{
+                  color: '#6B7280', fontWeight: 600,
+                  fontVariantNumeric: 'tabular-nums',
+                  position: 'sticky', left: 0, bgcolor: '#FFFFFF', zIndex: 2,
+                }}>
+                  {r.row_index}
+                </TableCell>
+                <TableCell>
+                  <Chip size="small" label={statusChip.label}
+                    sx={{ height: 20, fontSize: '0.66rem', fontWeight: 700,
+                      bgcolor: statusChip.tone.bg, color: statusChip.tone.fg }} />
+                </TableCell>
+                {columns.map((c) => {
+                  const flagged = isFlagged(r, c);
+                  const before = r.original?.[c];
+                  const after = r.modified?.[c];
+
+                  if (r.row_status === 'removed') {
+                    return (
+                      <TableCell key={c} sx={{
+                        fontFamily: 'ui-monospace, Menlo, monospace',
+                        fontSize: '0.74rem',
+                        bgcolor: TONE.removed.bg, color: TONE.removed.fg,
+                        textDecoration: 'line-through',
+                        maxWidth: 220, whiteSpace: 'nowrap',
+                        overflow: 'hidden', textOverflow: 'ellipsis',
+                      }}>
+                        {String(before ?? '')}
+                      </TableCell>
+                    );
+                  }
+                  if (r.row_status === 'added') {
+                    return (
+                      <TableCell key={c} sx={{
+                        fontFamily: 'ui-monospace, Menlo, monospace',
+                        fontSize: '0.74rem',
+                        bgcolor: TONE.added.bg, color: TONE.added.fg,
+                        maxWidth: 220, whiteSpace: 'nowrap',
+                        overflow: 'hidden', textOverflow: 'ellipsis',
+                      }}>
+                        {String(after ?? '')}
+                      </TableCell>
+                    );
+                  }
+                  if (flagged) {
+                    return (
+                      <TableCell key={c} sx={{
+                        fontFamily: 'ui-monospace, Menlo, monospace',
+                        fontSize: '0.74rem', p: '4px 8px',
+                        maxWidth: 240, whiteSpace: 'nowrap',
+                        overflow: 'hidden', textOverflow: 'ellipsis',
+                      }}>
+                        <Tooltip title={`Before: ${String(before ?? '')}`} arrow>
+                          <Box>
+                            <Box component="span" sx={{ display: 'inline-block',
+                              px: 0.75, py: 0.125, borderRadius: 0.5,
+                              bgcolor: TONE.removed.bg, color: TONE.removed.fg,
+                              textDecoration: 'line-through', mr: 0.5,
+                              fontSize: '0.7rem' }}>
+                              {String(before ?? '')}
+                            </Box>
+                            <Box component="span" sx={{ display: 'inline-block',
+                              px: 0.75, py: 0.125, borderRadius: 0.5,
+                              bgcolor: TONE.added.bg, color: TONE.added.fg,
+                              fontWeight: 600, fontSize: '0.7rem' }}>
+                              {String(after ?? '')}
+                            </Box>
+                          </Box>
+                        </Tooltip>
+                      </TableCell>
+                    );
+                  }
+                  return (
+                    <TableCell key={c} sx={{
+                      fontFamily: 'ui-monospace, Menlo, monospace',
+                      fontSize: '0.74rem', color: '#475569',
+                      maxWidth: 220, whiteSpace: 'nowrap',
+                      overflow: 'hidden', textOverflow: 'ellipsis',
+                    }}>
+                      {String(after ?? '')}
+                    </TableCell>
+                  );
+                })}
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </TableContainer>
   );
 }
+
 
 export default function Compare() {
   const { state, refresh } = useDataset();
   const [stats, setStats] = useState(null);
+  const [byCol, setByCol] = useState(null);
   const [selectedCols, setSelectedCols] = useState([]);
   const [startRow, setStartRow] = useState(0);
   const [numRows, setNumRows] = useState(50);
   const [diff, setDiff] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
+  const [onlyChanged, setOnlyChanged] = useState(true);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const loadStats = async () => {
     setErr('');
     try {
-      const { data } = await api.get('/data/compare/stats');
-      setStats(data);
-      // Default: first 10 common columns (matches Streamlit default)
+      const [statsRes, byColRes] = await Promise.all([
+        api.get('/data/compare/stats'),
+        api.get('/data/compare/by-column'),
+      ]);
+      setStats(statsRes.data);
+      setByCol(byColRes.data);
       setSelectedCols((prev) => {
         if (prev.length > 0) return prev;
-        return data.common_columns.slice(0, Math.min(10, data.common_columns.length));
+        // Default: pre-select the columns that actually changed (most useful)
+        const touched = (byColRes.data?.columns || []).map((c) => c.column);
+        if (touched.length > 0) return touched.slice(0, 8);
+        return statsRes.data.common_columns.slice(0,
+          Math.min(8, statsRes.data.common_columns.length));
       });
     } catch (e) {
       setErr(e?.response?.data?.detail || 'Failed to load comparison stats');
@@ -158,6 +429,7 @@ export default function Compare() {
   }, [stats, selectedCols.join(','), startRow, numRows]);
 
   const reset = async () => {
+    if (!window.confirm('Reset all changes? This restores the working dataset to its original uploaded state.')) return;
     await api.post('/data/reset');
     await refresh();
     await loadStats();
@@ -168,6 +440,14 @@ export default function Compare() {
   const maxStartRow = stats
     ? Math.max(0, Math.max(stats.original_rows, stats.modified_rows) - 1)
     : 0;
+
+  const narrative = buildNarrative(stats, byCol);
+  const removed = stats ? Math.max(0, stats.original_rows - stats.modified_rows) : 0;
+  const removedPct = stats && stats.original_rows
+    ? ((removed / stats.original_rows) * 100).toFixed(1)
+    : '0.0';
+  const cellsChanged = byCol?.total_modified_cells ?? stats?.modified_cells ?? 0;
+  const cdesTouched = byCol?.cdes_touched ?? 0;
 
   if (!state.loaded) {
     return (
@@ -180,145 +460,188 @@ export default function Compare() {
 
   return (
     <>
-      <PageHeader title="Compare: Original vs Modified"
+      <PageHeader
+        title="Before vs After"
+        subtitle="Audit-grade view of what cleansing changed in your dataset"
         actions={
-          <Button variant="outlined" startIcon={<RestartAltIcon />} onClick={reset}>
-            Reset to Original
+          <Button variant="outlined" startIcon={<RestartAltIcon />} onClick={reset}
+            sx={{ textTransform: 'none', fontWeight: 600 }}>
+            Reset to original
           </Button>
         } />
 
       {err && <Alert severity="error" sx={{ mb: 2 }}>{err}</Alert>}
 
-      {/* Stat row — verbatim port of the 7-stat summary */}
+      {(stats?.stale_state || byCol?.stale_state) && (
+        <Alert
+          severity="warning"
+          sx={{ mb: 2 }}
+          action={
+            <Button color="inherit" size="small" onClick={reset}
+              startIcon={<RestartAltIcon />}
+              sx={{ textTransform: 'none', fontWeight: 700 }}>
+              Reset & re-cleanse
+            </Button>
+          }
+        >
+          <Typography sx={{ fontWeight: 700, fontSize: 14, mb: 0.5 }}>
+            This diff is showing stale alignment.
+          </Typography>
+          <Typography sx={{ fontSize: 12.5 }}>
+            Your dataset was cleansed with an earlier version of the tool that
+            re-indexed rows after dropping them. Row identity is lost, so the
+            "Changed" badges below may not reflect real edits — they're side-effects
+            of the broken alignment. <b>Click "Reset & re-cleanse"</b> to restore the
+            original dataset, then re-apply your rules. Future cleansing actions
+            will preserve row identity correctly.
+          </Typography>
+        </Alert>
+      )}
+
+      {/* ── Narrative summary ────────────────────────────────────── */}
       {stats && (
-        <Paper sx={{ p: 2, mb: 2, bgcolor: '#f9fafb' }}>
-          <Stack direction="row" justifyContent="space-around" flexWrap="wrap"
-            useFlexGap spacing={1.5}>
-            <StatItem label="Original Rows" value={stats.original_rows} />
-            <StatItem label="Modified Rows" value={stats.modified_rows} />
-            <StatItem label="Row Change" value={stats.row_change} sign />
-            <StatItem label="Original Critical Data Elements" value={stats.original_columns} />
-            <StatItem label="Modified Critical Data Elements" value={stats.modified_columns} />
-            <StatItem label="Critical Data Element Change" value={stats.column_change} sign />
-            <StatItem label="Modified Cells" value={stats.modified_cells}
-              sign={false} />
-          </Stack>
+        <Paper variant="outlined" sx={{ p: 2.5, mb: 2.5, borderRadius: 2,
+          background: 'linear-gradient(180deg, #FFFFFF 0%, #FAFAFC 100%)' }}>
+          <Typography sx={{ fontSize: 14, fontWeight: 700, color: '#6B7280',
+            textTransform: 'uppercase', letterSpacing: '0.08em', mb: 0.75 }}>
+            Cleansing impact
+          </Typography>
+          <Typography sx={{ fontSize: 16, fontWeight: 500, color: '#1A1A1A',
+            lineHeight: 1.5, mb: 2 }}>
+            {narrative}
+          </Typography>
+
+          <Grid container spacing={1.5}>
+            <Grid item xs={12} sm={6} md={3}>
+              <HeroKPI
+                label="Original rows"
+                value={stats.original_rows.toLocaleString()}
+                sub="As uploaded"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <HeroKPI
+                label="Current rows"
+                value={stats.modified_rows.toLocaleString()}
+                sub={removed > 0 ? `${removed.toLocaleString()} removed (${removedPct}%)` : 'No rows removed'}
+                accent={removed > 0 ? '#b91c1c' : undefined}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <HeroKPI
+                label="Cells modified"
+                value={cellsChanged.toLocaleString()}
+                sub={cdesTouched > 0 ? `Across ${cdesTouched} CDE${cdesTouched === 1 ? '' : 's'}` : 'No edits'}
+                accent={cellsChanged > 0 ? '#854d0e' : undefined}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <HeroKPI
+                label="CDEs in dataset"
+                value={stats.modified_columns}
+                sub={`${stats.common_columns.length} present in both views`}
+              />
+            </Grid>
+          </Grid>
         </Paper>
       )}
 
-      <Divider sx={{ my: 2 }} />
+      {/* ── Per-CDE change ledger ────────────────────────────────── */}
+      <ChangeLedger byCol={byCol} />
 
-      {/* Settings row */}
+      {/* ── Detail view (row-by-row diff) ────────────────────────── */}
       {stats && stats.common_columns.length > 0 && (
-        <Grid container spacing={2} sx={{ mb: 2 }}>
-          <Grid item xs={12} md={6}>
-            <FormControl fullWidth size="small">
-              <InputLabel>Select critical data elements to compare</InputLabel>
-              <Select multiple value={selectedCols}
-                onChange={(e) => setSelectedCols(typeof e.target.value === 'string'
-                  ? e.target.value.split(',') : e.target.value)}
-                input={<OutlinedInput label="Select critical data elements to compare" />}
-                renderValue={(s) => s.join(', ')}>
-                {stats.common_columns.map((c) => (
-                  <MenuItem key={c} value={c}>{c}</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          </Grid>
-          <Grid item xs={6} md={3}>
-            <TextField fullWidth size="small" type="number" label="Start row"
-              value={startRow}
-              onChange={(e) => {
-                const v = parseInt(e.target.value || '0', 10);
-                setStartRow(Math.max(0, Math.min(maxStartRow, v)));
-              }}
-              inputProps={{ min: 0, max: maxStartRow }} />
-          </Grid>
-          <Grid item xs={6} md={3}>
-            <TextField fullWidth size="small" type="number" label="Rows to show"
-              value={numRows}
-              onChange={(e) => {
-                const v = parseInt(e.target.value || '50', 10);
-                setNumRows(Math.max(1, Math.min(500, v)));
-              }}
-              inputProps={{ min: 1, max: 500 }} />
-          </Grid>
-        </Grid>
+        <Paper variant="outlined" sx={{ borderRadius: 2 }}>
+          <Box sx={{ px: 2.5, py: 1.75, borderBottom: '1px solid #E5E7EB',
+            display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+            <Typography sx={{ fontSize: 15, fontWeight: 700, color: '#1A1A1A',
+              flex: 1 }}>
+              Row-by-row diff
+            </Typography>
+            <ToggleButtonGroup
+              size="small"
+              value={onlyChanged ? 'changed' : 'all'}
+              exclusive
+              onChange={(_, v) => v && setOnlyChanged(v === 'changed')}
+            >
+              <ToggleButton value="changed" sx={{ textTransform: 'none', fontSize: '0.78rem' }}>
+                Only changed rows
+              </ToggleButton>
+              <ToggleButton value="all" sx={{ textTransform: 'none', fontSize: '0.78rem' }}>
+                All rows
+              </ToggleButton>
+            </ToggleButtonGroup>
+            <Button
+              size="small"
+              startIcon={<TuneIcon />}
+              onClick={() => setShowAdvanced((v) => !v)}
+              sx={{ textTransform: 'none', fontWeight: 600, color: '#6B7280' }}>
+              {showAdvanced ? 'Hide filters' : 'Filters'}
+            </Button>
+          </Box>
+
+          <Collapse in={showAdvanced}>
+            <Box sx={{ px: 2.5, py: 2, bgcolor: '#FAFAFA', borderBottom: '1px solid #E5E7EB' }}>
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={6}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Critical data elements</InputLabel>
+                    <Select multiple value={selectedCols}
+                      onChange={(e) => setSelectedCols(typeof e.target.value === 'string'
+                        ? e.target.value.split(',') : e.target.value)}
+                      input={<OutlinedInput label="Critical data elements" />}
+                      renderValue={(s) => `${s.length} selected`}>
+                      {stats.common_columns.map((c) => (
+                        <MenuItem key={c} value={c}>{c}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
+                <Grid item xs={6} md={3}>
+                  <TextField fullWidth size="small" type="number" label="Start row"
+                    value={startRow}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value || '0', 10);
+                      setStartRow(Math.max(0, Math.min(maxStartRow, v)));
+                    }}
+                    inputProps={{ min: 0, max: maxStartRow }} />
+                </Grid>
+                <Grid item xs={6} md={3}>
+                  <TextField fullWidth size="small" type="number" label="Rows to scan"
+                    value={numRows}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value || '50', 10);
+                      setNumRows(Math.max(1, Math.min(500, v)));
+                    }}
+                    inputProps={{ min: 1, max: 500 }} />
+                </Grid>
+              </Grid>
+            </Box>
+          </Collapse>
+
+          {loading && <LinearProgress />}
+
+          <Box sx={{ p: 2 }}>
+            {diff && diff.rows && diff.rows.length > 0 && selectedCols.length > 0 ? (
+              <UnifiedDiffTable
+                rows={diff.rows}
+                columns={selectedCols}
+                isFlagged={isFlagged}
+                onlyChanged={onlyChanged}
+              />
+            ) : selectedCols.length === 0 ? (
+              <Alert severity="warning">Pick at least one CDE under Filters to see the row diff.</Alert>
+            ) : (
+              <Alert severity="info">Loading diff…</Alert>
+            )}
+          </Box>
+        </Paper>
       )}
 
       {stats && stats.common_columns.length === 0 && (
-        <Alert severity="warning">No common critical data elements found between original and modified data</Alert>
-      )}
-
-      {selectedCols.length === 0 && stats && stats.common_columns.length > 0 && (
-        <Alert severity="warning">Please select at least one critical data element to compare</Alert>
-      )}
-
-      {loading && <LinearProgress sx={{ mb: 2 }} />}
-
-      {/* Side-by-side diff panels */}
-      {diff && diff.rows && diff.rows.length > 0 && selectedCols.length > 0 && (
-        <>
-          <Grid container spacing={2}>
-            <Grid item xs={12} md={6}>
-              <DiffPanel title="ORIGINAL DATA" accent="#3b82f6"
-                columns={selectedCols} rows={diff.rows}
-                side="original" isFlagged={isFlagged} />
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <DiffPanel title="MODIFIED DATA" accent="#10b981"
-                columns={selectedCols} rows={diff.rows}
-                side="modified" isFlagged={isFlagged} />
-            </Grid>
-          </Grid>
-
-          <Legend />
-
-          {diff.changes_found && (
-            <>
-              <Divider sx={{ my: 3 }} />
-              <Typography variant="h6" gutterBottom>Change Summary</Typography>
-              <Grid container spacing={2}>
-                <Grid item xs={4}>
-                  <Paper sx={{ p: 2, textAlign: 'center' }}>
-                    <Typography variant="caption" color="text.secondary"
-                      sx={{ textTransform: 'uppercase', letterSpacing: 0.6 }}>
-                      Modified Cells
-                    </Typography>
-                    <Typography variant="h5" sx={{ fontWeight: 700,
-                      color: diff.modified_cells > 0 ? '#d97706' : 'text.primary' }}>
-                      {diff.modified_cells}
-                    </Typography>
-                  </Paper>
-                </Grid>
-                <Grid item xs={4}>
-                  <Paper sx={{ p: 2, textAlign: 'center' }}>
-                    <Typography variant="caption" color="text.secondary"
-                      sx={{ textTransform: 'uppercase', letterSpacing: 0.6 }}>
-                      Added Rows
-                    </Typography>
-                    <Typography variant="h5" sx={{ fontWeight: 700,
-                      color: diff.added_rows > 0 ? '#10b981' : 'text.primary' }}>
-                      {diff.added_rows}
-                    </Typography>
-                  </Paper>
-                </Grid>
-                <Grid item xs={4}>
-                  <Paper sx={{ p: 2, textAlign: 'center' }}>
-                    <Typography variant="caption" color="text.secondary"
-                      sx={{ textTransform: 'uppercase', letterSpacing: 0.6 }}>
-                      Removed Rows
-                    </Typography>
-                    <Typography variant="h5" sx={{ fontWeight: 700,
-                      color: diff.removed_rows > 0 ? '#ef4444' : 'text.primary' }}>
-                      {diff.removed_rows}
-                    </Typography>
-                  </Paper>
-                </Grid>
-              </Grid>
-            </>
-          )}
-        </>
+        <Alert severity="warning">
+          No common critical data elements between the original and current dataset.
+        </Alert>
       )}
     </>
   );

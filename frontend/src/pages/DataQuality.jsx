@@ -75,7 +75,7 @@ function ProgressTile({ label, value, denominator, tone = 'neutral' }) {
   );
 }
 
-export default function DataQuality() {
+export default function DataQuality({ onNavigate }) {
   const { state, refresh } = useDataset();
   const [byDim, setByDim] = useState(null);
   const [activeDim, setActiveDim] = useState('Completeness');
@@ -218,6 +218,7 @@ export default function DataQuality() {
     generated: 0, actionable: 0, passed: 0, applied: 0, unmapped: 0,
     blocked_empty: 0, blocked_incomplete: 0, multi_cde: 0, invalid: 0,
     rejected: 0, history: 0, empty_columns: 0, failing_rows_total: 0,
+    original_rows: 0, current_rows: 0, rows_removed: 0, columns: 0,
   };
   // Cleanable denominator = rules we CAN act on now (actionable + applied).
   // Passing rules are good but not "progress". Blocked/unmapped/invalid
@@ -332,6 +333,68 @@ export default function DataQuality() {
             mb: 2,
           }}
         />
+
+        {/* ── Dataset shape strip (before / after cleansing) ──────────── */}
+        <Box sx={{
+          display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap',
+          bgcolor: '#FAFAFA',
+          border: '1px solid #EDEDED', borderRadius: 1.5,
+          px: 2, py: 1.25, mb: 2,
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75 }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
+              color: '#8A8A8A', textTransform: 'uppercase' }}>
+              Original rows
+            </Typography>
+            <Typography sx={{ fontFamily: "'Montserrat', sans-serif",
+              fontSize: 17, fontWeight: 700, color: '#1A1A1A',
+              fontVariantNumeric: 'tabular-nums' }}>
+              {(totals.original_rows || 0).toLocaleString()}
+            </Typography>
+          </Box>
+          <Typography sx={{ color: '#D0D0D0', fontSize: 14 }}>→</Typography>
+          <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75 }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
+              color: '#8A8A8A', textTransform: 'uppercase' }}>
+              Current rows
+            </Typography>
+            <Typography sx={{ fontFamily: "'Montserrat', sans-serif",
+              fontSize: 17, fontWeight: 700,
+              color: totals.rows_removed > 0 ? '#15803d' : '#1A1A1A',
+              fontVariantNumeric: 'tabular-nums' }}>
+              {(totals.current_rows || 0).toLocaleString()}
+            </Typography>
+          </Box>
+          {totals.rows_removed > 0 && (
+            <Chip
+              size="small"
+              label={`−${totals.rows_removed.toLocaleString()} removed`}
+              sx={{ height: 22, fontSize: '0.72rem', fontWeight: 700,
+                bgcolor: '#fef2f2', color: '#b91c1c' }}
+            />
+          )}
+          <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, ml: 1 }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
+              color: '#8A8A8A', textTransform: 'uppercase' }}>
+              CDEs
+            </Typography>
+            <Typography sx={{ fontFamily: "'Montserrat', sans-serif",
+              fontSize: 17, fontWeight: 700, color: '#1A1A1A',
+              fontVariantNumeric: 'tabular-nums' }}>
+              {(totals.columns || 0).toLocaleString()}
+            </Typography>
+          </Box>
+          <Box sx={{ flex: 1 }} />
+          <Button
+            size="small"
+            variant="text"
+            onClick={() => onNavigate?.('final-dashboard')}
+            disabled={!onNavigate}
+            sx={{ textTransform: 'none', fontWeight: 600, color: '#6A28A8' }}
+          >
+            View final dashboard →
+          </Button>
+        </Box>
 
         <Stack direction="row" spacing={1.5} flexWrap="wrap">
           <ProgressTile label="Actionable" value={totals.actionable} tone={totals.actionable > 0 ? 'bad' : 'good'} />

@@ -6,6 +6,7 @@ import {
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import api from '../../api.js';
+import { useDataset } from '../../context/DatasetContext.jsx';
 
 const CASE_TONE = {
   upper: '#0E5226', lower: '#1E3A8A', title: '#7F5F00', mixed: '#7F1D1D', other: '#475569',
@@ -47,6 +48,7 @@ function CaseStack({ counts, dominant }) {
 }
 
 export default function StandardisationDetail() {
+  const { state } = useDataset();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
@@ -55,12 +57,12 @@ export default function StandardisationDetail() {
     let cancelled = false;
     setLoading(true);
     api
-      .get('/profile/standardisation')
+      .get('/profile/standardisation', { params: { source: 'current' } })
       .then(({ data }) => { if (!cancelled) setData(data); })
       .catch((e) => { if (!cancelled) setErr(e?.response?.data?.detail || 'Failed to compute standardisation'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, []);
+  }, [state.operations]);
 
   if (loading) return <LinearProgress />;
   if (err) return <Alert severity="error">{err}</Alert>;

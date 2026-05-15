@@ -7,6 +7,7 @@ import {
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import api from '../../api.js';
+import { useDataset } from '../../context/DatasetContext.jsx';
 
 const SEVERITY_TONE = {
   high:          { fg: '#7F1D1D', bg: '#FBEAEA', label: 'High risk' },
@@ -40,6 +41,7 @@ function MetricBlock({ label, value, accent, tooltip }) {
 }
 
 export default function UniquenessDetail() {
+  const { state } = useDataset();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
@@ -54,7 +56,7 @@ export default function UniquenessDetail() {
     setLoading(true);
     setErr('');
     try {
-      const { data } = await api.get('/profile/uniqueness');
+      const { data } = await api.get('/profile/uniqueness', { params: { source: 'current' } });
       setData(data);
       return data;
     } catch (e) {
@@ -93,7 +95,7 @@ export default function UniquenessDetail() {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [state.operations]);
 
   if (loading && !data) return <LinearProgress />;
   if (err) return <Alert severity="error">{err}</Alert>;

@@ -94,7 +94,11 @@ for rule, expected in cases:
 # TEST 3: regex inference for exact-length rules (must still work)
 # ─────────────────────────────────────────────────────────────────────────────
 print("\n=== TEST 3: regex inference (exact-length, not max) ===")
-got = infer_regex_pattern_from_rule("Validation", "PAN must be a string with a length of 10 characters")
+# Use a NEUTRAL identifier name (not PAN/GSTIN/IFSC/CIN/EORI/DUNS/EIN
+# etc.) — those are well-known regulatory formats and now correctly
+# take priority over generic exact-length inference. We're testing the
+# exact-length parser specifically here.
+got = infer_regex_pattern_from_rule("Validation", "Internal Code must be a string with a length of 10 characters")
 check("exact-length 10", got == "^.{10}$", f"got {got!r}")
 
 got = infer_regex_pattern_from_rule("Validation", "Code must be 6 characters long")
