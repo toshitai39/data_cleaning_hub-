@@ -1,3 +1,24 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Managed Postgres — REQUIRED for user accounts to survive across deploys.
+#
+# Render's container filesystem is EPHEMERAL: SQLite files written to
+# the container disk (the previous DATABASE_URL fallback) are wiped on
+# every redeploy / restart / scale event. That's why newly-registered
+# users like "rajat" kept disappearing — they were written to a SQLite
+# file that no longer exists on the next boot.
+#
+# This Postgres database persists user accounts (and projects, rules,
+# dq_config, etc.) regardless of how many times the API container is
+# recycled. Free tier is fine for low single-digit concurrent users.
+# ─────────────────────────────────────────────────────────────────────────────
+databases:
+  - name: data-cleaning-hub-db
+    plan: free
+    databaseName: data_cleaning_hub
+    user: data_cleaning_hub
+    region: oregon
+    ipAllowList: []   # only the linked Render service can reach it
+
 services:
   - type: web
     name: data-cleaning-hub-api
@@ -26,8 +47,14 @@ services:
         value: HS256
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
         value: "30"
+      # Render injects the managed Postgres connection string here at
+      # deploy time. The application reads DATABASE_URL via db.py and
+      # falls back to a local SQLite ONLY when the env var is missing
+      # (i.e. local development) — but on Render it'll always be set.
       - key: DATABASE_URL
-        value: sqlite:///./dp_platform.db
+        fromDatabase:
+          name: data-cleaning-hub-db
+          property: connectionString
 
   - type: web
     name: data-cleaning-hub-web

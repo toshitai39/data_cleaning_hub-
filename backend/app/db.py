@@ -30,6 +30,14 @@ DATABASE_URL = os.environ.get(
     f"sqlite:///{_DEFAULT_SQLITE_PATH.as_posix()}",
 )
 
+# Render / Heroku hand out connection strings starting with
+# ``postgres://`` but SQLAlchemy 2.x dropped support for that legacy
+# prefix — it wants ``postgresql://``. Normalising here is the
+# difference between "user data persists" and "boot loop on every
+# deploy because the dialect is unknown".
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
 # SQLite needs ``check_same_thread=False`` because FastAPI hands sessions to
 # worker threads; Postgres does not. Adapt connect args accordingly.
 _connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
