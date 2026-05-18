@@ -36,6 +36,13 @@ SYSTEMS: List[Dict[str, Any]] = [
         "status": "available",
     },
     {
+        "id": "netsuite",
+        "label": "NetSuite",
+        "description": "Live SuiteQL extract via Token-Based Authentication (TBA).",
+        "icon": "netsuite",
+        "status": "available",
+    },
+    {
         "id": "sap_s4hana",
         "label": "SAP S/4HANA",
         "description": "Direct extract from SAP master-data tables.",
@@ -258,6 +265,128 @@ STREAM_SCHEMAS: Dict[tuple, List[Dict[str, Any]]] = {
             "join_key": "SAKNR",
             "description": "Per company-code GL account behavior.",
             "expected_columns": ["BUKRS", "SAKNR", "WAERS", "MWSKZ", "XOPVW"],
+        },
+    ],
+
+    # ── NetSuite · Customer Master ────────────────────────────────
+    # NetSuite stores customer data across several record types. The
+    # ``id`` field on each entry is the SuiteQL table/record name; the
+    # connector translates it into a SELECT * FROM <id> query.
+    ("netsuite", "customer"): [
+        {
+            "id": "customer",
+            "label": "Customer Record",
+            "role": "primary",
+            "required": True,
+            "join_key": None,
+            "description": "One row per customer entity — name, email, status, currency.",
+            "expected_columns": ["id", "entityid", "companyname", "email", "phone", "isinactive", "datecreated"],
+        },
+        {
+            "id": "customeraddressbook",
+            "label": "Customer Addresses",
+            "role": "lookup",
+            "required": False,
+            "join_key": "entity",
+            "description": "Address book entries linked to customer records.",
+            "expected_columns": ["entity", "addr1", "addr2", "city", "state", "zip", "country"],
+        },
+        {
+            "id": "customercategory",
+            "label": "Customer Categories",
+            "role": "lookup",
+            "required": False,
+            "join_key": "id",
+            "description": "Reference list of customer segmentation categories.",
+            "expected_columns": ["id", "name", "isinactive"],
+        },
+        {
+            "id": "subsidiary",
+            "label": "Subsidiaries",
+            "role": "lookup",
+            "required": False,
+            "join_key": None,
+            "description": "Legal entities the customer can belong to (OneWorld accounts).",
+            "expected_columns": ["id", "name", "country", "currency", "isinactive"],
+        },
+    ],
+
+    # ── NetSuite · Vendor Master ──────────────────────────────────
+    ("netsuite", "vendor"): [
+        {
+            "id": "vendor",
+            "label": "Vendor Record",
+            "role": "primary",
+            "required": True,
+            "join_key": None,
+            "description": "One row per vendor — name, email, phone, currency, terms.",
+            "expected_columns": ["id", "entityid", "companyname", "email", "phone", "currency", "terms", "isinactive"],
+        },
+        {
+            "id": "vendoraddressbook",
+            "label": "Vendor Addresses",
+            "role": "lookup",
+            "required": False,
+            "join_key": "entity",
+            "description": "Address book entries linked to vendor records.",
+            "expected_columns": ["entity", "addr1", "city", "state", "zip", "country"],
+        },
+        {
+            "id": "vendorcategory",
+            "label": "Vendor Categories",
+            "role": "lookup",
+            "required": False,
+            "join_key": "id",
+            "description": "Vendor segmentation reference data.",
+            "expected_columns": ["id", "name", "isinactive"],
+        },
+    ],
+
+    # ── NetSuite · Material / Item Master ─────────────────────────
+    ("netsuite", "material"): [
+        {
+            "id": "item",
+            "label": "Item Record",
+            "role": "primary",
+            "required": True,
+            "join_key": None,
+            "description": "All item types (inventory, service, kit, assembly).",
+            "expected_columns": ["id", "itemid", "displayname", "itemtype", "isinactive", "baseprice"],
+        },
+        {
+            "id": "inventoryitem",
+            "label": "Inventory Item Detail",
+            "role": "extension",
+            "required": False,
+            "join_key": "id",
+            "description": "Additional fields for inventory-tracked items.",
+            "expected_columns": ["id", "averagecost", "lastpurchaseprice", "quantityonhand"],
+        },
+    ],
+
+    # ── NetSuite · Employee Master ────────────────────────────────
+    ("netsuite", "employee"): [
+        {
+            "id": "employee",
+            "label": "Employee Record",
+            "role": "primary",
+            "required": True,
+            "join_key": None,
+            "description": "One row per employee — name, email, title, hire date.",
+            "expected_columns": ["id", "entityid", "firstname", "lastname", "email", "title", "hiredate", "isinactive"],
+        },
+    ],
+
+    # ── NetSuite · GL Account Master ──────────────────────────────
+    ("netsuite", "gl_account"): [
+        {
+            "id": "account",
+            "label": "GL Account Record",
+            "role": "primary",
+            "required": True,
+            "join_key": None,
+            "description": "Chart of accounts — account number, type, currency.",
+            "expected_columns": ["id", "acctnumber", "accountsearchdisplayname", "accttype", "currency", "isinactive"],
         },
     ],
 }

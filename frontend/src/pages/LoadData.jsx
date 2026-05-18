@@ -10,6 +10,7 @@ import { useDataset } from '../context/DatasetContext.jsx';
 import HeaderConfigurator from './loaddata/HeaderConfigurator.jsx';
 import DataStatus from './loaddata/DataStatus.jsx';
 import DbConnector from './loaddata/DbConnector.jsx';
+import NetSuiteConnector from './loaddata/NetSuiteConnector.jsx';
 import ProjectTables from './loaddata/ProjectTables.jsx';
 
 const FORMATS = [
@@ -76,9 +77,13 @@ export default function LoadData() {
         subtitle="Upload a dataset or connect a database. The pipeline runs on the active file until you reset or load a different one."
       />
 
+      {/* NetSuite live-connector panel — credential form + stream loader.
+          Renders only when the active project's system is NetSuite. */}
+      <NetSuiteConnector onLoaded={handleLoaded} />
+
       {/* Multi-table upload panel — only renders for projects whose
           system has a real multi-table schema (SAP today). For file_upload
-          projects this component returns null. */}
+          and live-connector projects this component returns null. */}
       <ProjectTables />
 
       {!state.loaded && (

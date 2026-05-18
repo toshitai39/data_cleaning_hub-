@@ -25,6 +25,7 @@ from .routers import (  # noqa: E402  (import after sys.path tweak)
     data_router,
     duplicates_router,
     export_router,
+    netsuite_router,
     profile_router,
     projects_router,
     quality_router,
@@ -63,6 +64,7 @@ app.include_router(rule_generator_router.router)
 app.include_router(export_router.router)
 app.include_router(audit_router.router)
 app.include_router(admin_router.router)
+app.include_router(netsuite_router.router)
 
 
 @app.on_event("startup")

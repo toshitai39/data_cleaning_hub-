@@ -24,6 +24,12 @@ openai==2.33.0
 httpx==0.28.1
 requests==2.33.1
 
+# NetSuite SuiteQL connector — OAuth 1.0a Token-Based Auth.
+# requests-oauthlib does the HMAC-SHA256 signing; cryptography backs
+# the credential vault (Fernet symmetric encryption keyed off SECRET_KEY).
+requests-oauthlib==2.0.0
+cryptography==48.0.0
+
 RapidFuzz==3.14.5
 jellyfish==1.2.1
 Metaphone==0.6

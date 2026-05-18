@@ -140,8 +140,12 @@ export default function ProjectTables() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
+  // Multi-table file-upload flow is for systems where the user supplies
+  // each table as a separate file (SAP today). Live API connectors like
+  // NetSuite have their own dedicated panel — don't double-render the
+  // upload tiles for them.
   const isMultiTable =
-    active && active.system?.id !== 'file_upload';
+    active && !['file_upload', 'netsuite'].includes(active.system?.id);
 
   const load = async () => {
     if (!active) return;

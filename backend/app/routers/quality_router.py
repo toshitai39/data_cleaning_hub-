@@ -468,8 +468,17 @@ def by_dimension(sess: SessionData = Depends(require_dataframe)) -> dict:
     """
     _ensure_config(sess)
 
-    # ── Column health
-    real_cols = set(map(str, sess.df.columns)) if sess.df is not None else set()
+    # ── Column health — restricted to the user's selected scope (CDEs of
+    # interest from Load Data). Without this, "CDEs in dataset" and the
+    # "N CDEs are 100% empty" banner count columns the user explicitly
+    # excluded from their analysis (e.g. 42 unused columns in a
+    # 53-column upload showed as empty when the user only picked 11).
+    scoped_cols = scoped_columns(sess) if sess.df is not None else []
+    if scoped_cols:
+        real_cols = {str(c) for c in scoped_cols if c in sess.df.columns}
+    else:
+        # No explicit scope → treat every column as in-scope.
+        real_cols = set(map(str, sess.df.columns)) if sess.df is not None else set()
     col_health: Dict[str, Dict[str, Any]] = {}
     empty_columns: List[Dict[str, Any]] = []
     if sess.df is not None and not sess.df.empty:
@@ -495,7 +504,7 @@ def by_dimension(sess: SessionData = Depends(require_dataframe)) -> dict:
     pending_sigs = _pending_signature_map(sess)
 
     # ── Evaluate every generated rule
-    rg_df = get_enriched_rg_rules(sess.ai_validation_rules)
+    rg_df = get_enriched_rg_rules(sess.ai_validation_rules, glossary=sess.semantic_glossary)
     dim_to_rules: Dict[str, List[Dict[str, Any]]] = {d: [] for d in _DIM_ORDER}
     cross_count = 0
 
@@ -620,7 +629,10 @@ def by_dimension(sess: SessionData = Depends(require_dataframe)) -> dict:
     original_rows = int(len(sess.original_df)) if isinstance(sess.original_df, pd.DataFrame) else int(len(sess.df) if sess.df is not None else 0)
     current_rows = int(len(sess.df)) if sess.df is not None else 0
     rejected_rows = int(len(sess.reject_df)) if isinstance(sess.reject_df, pd.DataFrame) else 0
-    columns_count = int(sess.df.shape[1]) if sess.df is not None else 0
+    # ``columns`` reports the in-scope CDE count — matches what the
+    # steward sees on Data Profiling and Initial Dashboard. Falls back
+    # to the full df width when no explicit scope has been saved.
+    columns_count = len(real_cols)
     totals = {
         "generated": len(all_rules) + cross_count,
         "actionable": sum(1 for r in all_rules if r["status"] == "actionable"),
@@ -991,7 +1003,7 @@ def resolve_all_manual(sess: SessionData = Depends(require_dataframe)) -> dict:
     into an executable regex. Adds the resolved ones to dq_config so they
     show up as pending. Dramatically cuts the "noise" residue."""
     _ensure_config(sess)
-    rg_df = get_enriched_rg_rules(sess.ai_validation_rules)
+    rg_df = get_enriched_rg_rules(sess.ai_validation_rules, glossary=sess.semantic_glossary)
     if rg_df is None or rg_df.empty:
         return {"resolved": 0, "skipped": 0}
     if sess.df is None:
@@ -1246,7 +1258,7 @@ def import_ai_dimension(dimension: str,
     on the same column) are skipped.
     """
     _ensure_config(sess)
-    rg_df = get_enriched_rg_rules(sess.ai_validation_rules)
+    rg_df = get_enriched_rg_rules(sess.ai_validation_rules, glossary=sess.semantic_glossary)
     if rg_df is None or rg_df.empty:
         return {"imported": 0}
     imported = 0
@@ -1457,7 +1469,7 @@ def ai_suggest(body: AiSuggestBody, sess: SessionData = Depends(require_datafram
 
 @router.get("/rg-rules/{column}")
 def rg_rules_for_column(column: str, sess: SessionData = Depends(require_dataframe)) -> dict:
-    rg_full = get_enriched_rg_rules(sess.ai_validation_rules)
+    rg_full = get_enriched_rg_rules(sess.ai_validation_rules, glossary=sess.semantic_glossary)
     if rg_full is None or rg_full.empty:
         return {"available": False, "options": []}
     options = get_rg_options_for_column(rg_full, column)
@@ -1470,7 +1482,7 @@ def rg_add(column: str, body: RgAddBody, sess: SessionData = Depends(require_dat
     cfg = sess.dq_config.get(column)
     if not cfg:
         raise HTTPException(status_code=404, detail="Column not found")
-    rg_full = get_enriched_rg_rules(sess.ai_validation_rules)
+    rg_full = get_enriched_rg_rules(sess.ai_validation_rules, glossary=sess.semantic_glossary)
     if rg_full is None or rg_full.empty:
         raise HTTPException(status_code=400, detail="No Rule Generator rules in session")
     options = get_rg_options_for_column(rg_full, column)

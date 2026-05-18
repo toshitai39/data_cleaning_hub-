@@ -47,12 +47,24 @@ def _drop_narrative_accuracy(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def get_enriched_rg_rules(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+def get_enriched_rg_rules(
+    df: Optional[pd.DataFrame],
+    glossary: Optional[Dict[str, Any]] = None,
+) -> Optional[pd.DataFrame]:
+    """Drop narrative-only Accuracy rules, then resolve a regex for every
+    remaining row.
+
+    The optional ``glossary`` (sess.semantic_glossary, keyed by column
+    name) unlocks the canonical-regex tier in
+    ``enrich_dataframe_regex_patterns``: when a column is AI-classified
+    as PAN / GSTIN / Email / ISO country / etc., the Cleansing rule for
+    that column will use the SAME regex Profile's Validation drill-down
+    uses. No more "Cleansing says pass, Profile says invalid" splits.
+    """
     if df is None or df.empty:
         return None
-    # Filter BEFORE enrichment so inferred regexes don't hide narratives.
     cleaned = _drop_narrative_accuracy(df.copy())
-    return enrich_dataframe_regex_patterns(cleaned)
+    return enrich_dataframe_regex_patterns(cleaned, glossary=glossary)
 
 
 def rg_row_to_applied_rule(row: pd.Series) -> Optional[Dict[str, Any]]:

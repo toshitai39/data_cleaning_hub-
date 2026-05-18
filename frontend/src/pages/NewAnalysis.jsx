@@ -7,12 +7,14 @@ import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import StorageOutlinedIcon from '@mui/icons-material/StorageOutlined';
 import CloudUploadOutlinedIcon from '@mui/icons-material/CloudUploadOutlined';
+import CloudSyncOutlinedIcon from '@mui/icons-material/CloudSyncOutlined';
 import AltRouteOutlinedIcon from '@mui/icons-material/AltRouteOutlined';
 import api from '../api.js';
 import { useProject } from '../context/ProjectContext.jsx';
 
 const SYSTEM_ICON = {
   file_upload: CloudUploadOutlinedIcon,
+  netsuite: CloudSyncOutlinedIcon,
 };
 
 function StepLabel({ index, label, active, done }) {
@@ -393,7 +395,7 @@ export default function NewAnalysis({ onCancel, onCreated }) {
               <Typography sx={{ fontSize: 12.5, color: '#555555', mb: 1.5 }}>
                 {selectedSystem?.label} stores {selectedStream?.label?.toLowerCase()} data
                 across these physical tables. After creating the project you'll
-                upload each one separately.
+                {systemId === 'netsuite' ? ' pull them via SuiteQL from the Load data tab.' : ' upload each one separately.'}
               </Typography>
               <Stack spacing={0.75}>
                 {schema.tables.map((t) => (

@@ -1288,6 +1288,33 @@ def infer_regex_pattern_from_rule(dimension: str, rule_text: str) -> str:
     if re.search(r"\bswift\b", rl) or re.search(r"\bbic\b", rl):
         return r"^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$"
 
+    # ── UUID — case-insensitive 8-4-4-4-12 hex with hyphens. The AI
+    # commonly writes "valid UUID", "UUID string", "UUID format". A
+    # broad ``uuid`` substring check would over-match on tokens like
+    # "uuid_v4_field"; the trigger-word context narrows it.
+    if "uuid" in rl and re.search(
+        r"\b(valid|format|string|standard|representation|v4|version)\b", rl
+    ) or re.search(r"\bvalid\s+uuid\b", rl):
+        return r"(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+
+    # ── Length RANGE — "between 8 and 10 characters", "8 to 10 chars".
+    # Must be checked BEFORE max-length / exact-length so the range
+    # form takes precedence. Examples the LLM commonly emits:
+    #   "Entity Code must be a string with a length between 8 and 10 characters"
+    #   "must be 5 to 15 characters long"
+    #   "between 2 and 4 chars"
+    range_match = re.search(
+        r"(?:length\s+)?between\s+(\d+)\s+and\s+(\d+)\s*(?:char|character)s?",
+        rl,
+    ) or re.search(
+        r"(\d+)\s+to\s+(\d+)\s*(?:char|character)s?",
+        rl,
+    )
+    if range_match:
+        lo, hi = int(range_match.group(1)), int(range_match.group(2))
+        if lo <= hi:
+            return rf"^.{{{lo},{hi}}}$"
+
     # Max-length is checked BEFORE exact-length because phrases like
     # "maximum length of 255 characters" otherwise match the exact-length
     # regex below and produce ^.{255}$, rejecting every shorter value.
@@ -1344,7 +1371,18 @@ def infer_regex_pattern_from_rule(dimension: str, rule_text: str) -> str:
         n = int(m.group(1))
         return rf"^\d{{{n}}}$"
 
-    if "valid string" in rl or "valid string format" in rl:
+    # ── Generic "valid string" / "structural rules for string" — when
+    # the AI can't say anything more specific, fall back to "must have
+    # at least one non-whitespace character". Better than Unmapped,
+    # weaker than any specific format constraint. The triggers cover
+    # the LLM's catch-all phrasings.
+    if (
+        "valid string" in rl
+        or "valid string format" in rl
+        or re.search(r"\bstructural\s+rules\s+for\s+(?:a\s+)?string", rl)
+        or re.search(r"\b(?:must be|is)\s+(?:a\s+)?(?:non[- ]empty\s+)?string\b", rl)
+        or re.search(r"\bstring\s+data(?:type)?\b", rl)
+    ):
         return r"^(?=.*\S).*$"
 
     # ── Email — broad catch for the LLM's many ways of saying "email" ──
@@ -1428,14 +1466,83 @@ def infer_regex_pattern_from_rule(dimension: str, rule_text: str) -> str:
     return ""
 
 
-def enrich_dataframe_regex_patterns(df: pd.DataFrame) -> pd.DataFrame:
-    """Fill empty ``Regex Pattern`` cells using :func:`infer_regex_pattern_from_rule`.
+def extract_regex_literal_from_text(rule_text: str) -> str:
+    """Pull a ``^...$`` regex literal directly out of the rule's prose.
+
+    The AI rule generator frequently writes rules like:
+      • "Entity Code must match the regex pattern ^BY\\d{6}$."
+      • "ID must satisfy the regex pattern ^[0-9a-f]{8}-[0-9a-f]{4}-...$"
+      • "Updated By must match the format ^[A-Za-z0-9._%+-]+@.+\\.[A-Za-z]{2,}$"
+
+    Every one of those has a fully-formed Python-compatible regex sitting
+    right in the text — but the cleansing engine was leaving them Unmapped
+    because the ``Regex Pattern`` column wasn't separately populated.
+    This function rescues that signal: it finds a ``^...$`` substring,
+    validates it compiles, and returns it. Empty string if no match.
+    """
+    if not rule_text:
+        return ""
+    # Look for ^...$ where the body has no whitespace and no quote marks
+    # (those would indicate the regex is itself enclosed in a string
+    # rather than being the raw pattern).
+    m = re.search(r"\^[^\s`'\"]+\$", rule_text)
+    if not m:
+        return ""
+    candidate = m.group(0)
+    try:
+        re.compile(candidate)
+        return candidate
+    except re.error:
+        return ""
+
+
+# ── Shared canonical regex registry ───────────────────────────────────────
+# The Profile drill-down validates against a single source-of-truth
+# registry (``backend.app.services.dama_assessment._FORMAT_CHECKS``).
+# Cleansing now READS THE SAME REGISTRY when a column has an AI-
+# classified semantic type, so the two views can't disagree on what
+# "valid" means for PAN / GSTIN / Email / etc. Lazy import to avoid a
+# circular dependency at module-load time (engine.py is imported by
+# the rule generator before the FastAPI services package is ready).
+def _canonical_regex_for_semantic_type(semantic_type: str) -> str:
+    """Return the canonical regex Profile uses for this semantic type,
+    or "" when none is registered. Same source-of-truth as the
+    Validation drill-down — guarantees the two pages agree."""
+    if not semantic_type:
+        return ""
+    try:
+        from backend.app.services.dama_assessment import _FORMAT_CHECKS
+    except Exception:
+        return ""
+    rx = _FORMAT_CHECKS.get(semantic_type.lower())
+    return rx.pattern if rx is not None else ""
+
+
+def enrich_dataframe_regex_patterns(
+    df: pd.DataFrame,
+    glossary: dict | None = None,
+) -> pd.DataFrame:
+    """Resolve a regex pattern for every row using a 4-tier strategy.
+
+    Priority order (first match wins):
+      1. Existing non-empty ``Regex Pattern`` column — LLM emitted it
+      2. Regex literal embedded in the rule text (``^...$`` substring)
+      3. Canonical regex from the column's AI-classified semantic type
+         (PAN / GSTIN / Email / ISO country / etc.) — uses the SAME
+         registry as Profile's Validation drill-down, so verdicts match
+      4. Natural-language inference via ``infer_regex_pattern_from_rule``
 
     Args:
-        df: Rules dataframe with ``Dimension`` and ``Data Quality Rule`` columns.
+        df: Rules dataframe with ``Dimension`` and ``Data Quality Rule``
+            columns (and optionally ``Column`` for the semantic-type
+            lookup).
+        glossary: Per-column AI classification keyed by column name.
+            Each entry should expose ``semantic_type``. When supplied,
+            unblocks tier-3 (canonical-type) mapping.
 
     Returns:
-        A copy of *df* with inferred patterns where the pattern was blank.
+        A copy of *df* with the ``Regex Pattern`` column populated
+        wherever a regex could be resolved.
     """
     out = df.copy()
     if "Regex Pattern" not in out.columns:
@@ -1448,8 +1555,29 @@ def enrich_dataframe_regex_patterns(df: pd.DataFrame) -> pd.DataFrame:
             continue
         cur = out.at[idx, "Regex Pattern"]
         if pd.notna(cur) and str(cur).strip() != "":
+            # Tier 1: existing regex stays.
             continue
         rule = str(out.at[idx, "Data Quality Rule"])
+
+        # Tier 2: regex literal embedded in the rule text. Catches
+        # AI-generated rules like "must match the regex pattern ^BY\d{6}$".
+        embedded = extract_regex_literal_from_text(rule)
+        if embedded:
+            out.at[idx, "Regex Pattern"] = embedded
+            continue
+
+        # Tier 3: canonical regex from the column's semantic_type. This
+        # is the path that makes Cleansing and Profile agree by design.
+        if glossary and "Column" in out.columns:
+            col = str(out.at[idx, "Column"]).strip()
+            entry = glossary.get(col) or {}
+            sem = str(entry.get("semantic_type") or "").strip()
+            canonical = _canonical_regex_for_semantic_type(sem)
+            if canonical:
+                out.at[idx, "Regex Pattern"] = canonical
+                continue
+
+        # Tier 4: natural-language inference fallback.
         inferred = infer_regex_pattern_from_rule(dim, rule)
         if inferred:
             out.at[idx, "Regex Pattern"] = inferred
