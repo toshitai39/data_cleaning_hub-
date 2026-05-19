@@ -160,7 +160,13 @@ def _try_composite_unique(
     # unique by accident.
     cols = candidate_columns[:4]
     sub = df[cols]
-    dup_mask = sub.duplicated(keep=False)
+    # Exclude tuples that are entirely null — pandas' duplicated() treats
+    # two all-NaN tuples as equal to each other, which would flag every
+    # blank row pair as a "composite duplicate" even though they're just
+    # missing data (a Completeness issue, not a Uniqueness one). The
+    # modal otherwise renders a table of empty cells with no signal.
+    all_null = sub.isna().all(axis=1)
+    dup_mask = sub.duplicated(keep=False) & ~all_null
     count = int(dup_mask.sum())
     if count == 0:
         example = "All tuples unique - No issues found"

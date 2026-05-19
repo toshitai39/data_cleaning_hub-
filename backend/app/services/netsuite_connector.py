@@ -294,6 +294,36 @@ _STREAM_QUERIES: Dict[Tuple[str, str], str] = {
 }
 
 
+def get_global_credentials() -> Optional[NetSuiteCredentials]:
+    """Read NetSuite credentials from environment variables.
+
+    When NETSUITE_ACCOUNT_ID (+ the four token fields) are set, the
+    credential form on the Load data page is hidden entirely — users
+    connect with one click and never need to enter or manage secrets
+    themselves. Intended for client deployments where an admin
+    configures the integration once in .env / Render dashboard.
+
+    Returns None when any of the five required vars is absent.
+    """
+    import os
+    account_id = os.environ.get("NETSUITE_ACCOUNT_ID", "").strip()
+    if not account_id:
+        return None
+    consumer_key    = os.environ.get("NETSUITE_CONSUMER_KEY", "").strip()
+    consumer_secret = os.environ.get("NETSUITE_CONSUMER_SECRET", "").strip()
+    token_id        = os.environ.get("NETSUITE_TOKEN_ID", "").strip()
+    token_secret    = os.environ.get("NETSUITE_TOKEN_SECRET", "").strip()
+    if not all([consumer_key, consumer_secret, token_id, token_secret]):
+        return None
+    return NetSuiteCredentials(
+        account_id=account_id,
+        consumer_key=consumer_key,
+        consumer_secret=consumer_secret,
+        token_id=token_id,
+        token_secret=token_secret,
+    )
+
+
 def query_for_table(stream_id: str, table_id: str) -> Optional[str]:
     """Look up the canned SuiteQL for one (stream, table) pair."""
     return _STREAM_QUERIES.get((stream_id, table_id))

@@ -1,4 +1,5 @@
 """Comprehensive AI Data Quality Rule Engine for Rule Generator"""
+from __future__ import annotations
 
 import logging
 import re

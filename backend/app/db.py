@@ -21,7 +21,8 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
 _DEFAULT_SQLITE_PATH = (
-    Path(__file__).resolve().parents[2] / "backend" / "storage" / "projects.db"
+    Path.home() / "Library" / "Application Support" / "MasterDataProfiler"
+    / "storage" / "projects.db"
 )
 _DEFAULT_SQLITE_PATH.parent.mkdir(parents=True, exist_ok=True)
 

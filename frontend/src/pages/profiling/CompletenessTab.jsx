@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import {
   Box, Typography, Grid, Paper, Chip, Stack, Alert, LinearProgress,
   TextField, InputAdornment, Switch, FormControlLabel,
@@ -237,46 +237,74 @@ export default function CompletenessTab() {
             )}
             {fields.map((f) => {
               const tone = STATUS_STYLE[f.status] || STATUS_STYLE.Acceptable;
+              const samples = f.samples_blank || [];
               return (
-                <TableRow key={f.field} hover>
-                  <TableCell sx={{ color: '#8A8A8A', fontVariantNumeric: 'tabular-nums' }}>{f.rank}</TableCell>
-                  <TableCell sx={{ py: 0.85 }}>
-                    <Stack direction="row" spacing={0.75} alignItems="center">
-                      <Typography sx={{ fontFamily: 'monospace', fontSize: '0.84rem', fontWeight: 600 }}>{f.field}</Typography>
-                      {f.is_cde && (
-                        <Tooltip title="Critical Data Element — AI flagged this column as a business-critical identifier or attribute.">
-                          <StarOutlineRoundedIcon sx={{ fontSize: 16, color: '#6A28A8' }} />
-                        </Tooltip>
-                      )}
-                    </Stack>
-                  </TableCell>
-                  <TableCell sx={{ color: '#475569', fontSize: '0.8rem' }}>
-                    {f.semantic_type || <span style={{ color: '#CBD5E1' }}>—</span>}
-                  </TableCell>
-                  <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontSize: '0.82rem' }}>
-                    {(f.filled || 0).toLocaleString()}
-                  </TableCell>
-                  <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontSize: '0.82rem', color: f.blank > 0 ? '#7F1D1D' : '#8A8A8A' }}>
-                    {(f.blank || 0).toLocaleString()}
-                  </TableCell>
-                  <TableCell sx={{ minWidth: 160 }}>
-                    <FillBar pct={f.fill_rate} status={f.status} />
-                  </TableCell>
-                  <TableCell>
-                    <Chip
-                      size="small"
-                      label={f.status}
-                      sx={{
-                        height: 22,
-                        fontSize: '0.7rem',
-                        fontWeight: 700,
-                        color: tone.fg,
-                        bgcolor: tone.bg,
-                        border: 'none',
-                      }}
-                    />
-                  </TableCell>
-                </TableRow>
+                <Fragment key={f.field}>
+                  <TableRow hover>
+                    <TableCell sx={{ color: '#8A8A8A', fontVariantNumeric: 'tabular-nums', borderBottom: samples.length ? 'none' : undefined }}>{f.rank}</TableCell>
+                    <TableCell sx={{ py: 0.85, borderBottom: samples.length ? 'none' : undefined }}>
+                      <Stack direction="row" spacing={0.75} alignItems="center">
+                        <Typography sx={{ fontFamily: 'monospace', fontSize: '0.84rem', fontWeight: 600 }}>{f.field}</Typography>
+                        {f.is_cde && (
+                          <Tooltip title="Critical Data Element — AI flagged this column as a business-critical identifier or attribute.">
+                            <StarOutlineRoundedIcon sx={{ fontSize: 16, color: '#6A28A8' }} />
+                          </Tooltip>
+                        )}
+                      </Stack>
+                    </TableCell>
+                    <TableCell sx={{ color: '#475569', fontSize: '0.8rem', borderBottom: samples.length ? 'none' : undefined }}>
+                      {f.semantic_type || <span style={{ color: '#CBD5E1' }}>—</span>}
+                    </TableCell>
+                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontSize: '0.82rem', borderBottom: samples.length ? 'none' : undefined }}>
+                      {(f.filled || 0).toLocaleString()}
+                    </TableCell>
+                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontSize: '0.82rem', color: f.blank > 0 ? '#7F1D1D' : '#8A8A8A', borderBottom: samples.length ? 'none' : undefined }}>
+                      {(f.blank || 0).toLocaleString()}
+                    </TableCell>
+                    <TableCell sx={{ minWidth: 160, borderBottom: samples.length ? 'none' : undefined }}>
+                      <FillBar pct={f.fill_rate} status={f.status} />
+                    </TableCell>
+                    <TableCell sx={{ borderBottom: samples.length ? 'none' : undefined }}>
+                      <Chip
+                        size="small"
+                        label={f.status}
+                        sx={{
+                          height: 22,
+                          fontSize: '0.7rem',
+                          fontWeight: 700,
+                          color: tone.fg,
+                          bgcolor: tone.bg,
+                          border: 'none',
+                        }}
+                      />
+                    </TableCell>
+                  </TableRow>
+                  {samples.length > 0 && (
+                    <TableRow>
+                      <TableCell />
+                      <TableCell colSpan={6} sx={{ py: 1, bgcolor: '#FBFAFC' }}>
+                        <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+                          <Typography sx={{ fontSize: '0.7rem', fontWeight: 700, color: '#7F1D1D', textTransform: 'uppercase', letterSpacing: '0.06em', mr: 0.5 }}>
+                            Blank in rows
+                          </Typography>
+                          {samples.map((s, i) => (
+                            <Chip
+                              key={i}
+                              size="small"
+                              label={`row ${s.row}`}
+                              sx={{ height: 22, fontSize: '0.74rem', bgcolor: '#FFFFFF', border: '1px solid #DDD6E5', fontFamily: 'monospace', color: '#1A1A1A' }}
+                            />
+                          ))}
+                          {f.blank > samples.length && (
+                            <Typography sx={{ fontSize: '0.74rem', color: '#8A8A8A', ml: 0.5 }}>
+                              + {(f.blank - samples.length).toLocaleString()} more
+                            </Typography>
+                          )}
+                        </Stack>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </Fragment>
               );
             })}
           </TableBody>

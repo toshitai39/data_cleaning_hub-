@@ -234,18 +234,25 @@ def _score_validation(df: pd.DataFrame, glossary: Optional[Dict[str, Any]]) -> D
 
 
 def _detect_identifier_columns(df: pd.DataFrame, glossary: Optional[Dict[str, Any]]) -> List[str]:
-    """Find columns that the AI tagged as business identifiers.
+    """Find columns that the AI tagged as business identifiers AND that
+    actually behave like identifiers in the data.
 
-    Used for Uniqueness scoring. Returns columns whose AI-assigned
-    ``semantic_type`` is an identifier (PAN, GSTIN, account_number,
-    numeric_id, alphanumeric_id, …) OR which the AI marked as a CDE
-    (``recommended=true``) with no contrary signal. No column-name
-    keyword matching — entirely AI-driven so the same logic works on
-    customer / vendor / material / GL masters or any custom dataset.
+    Used for Uniqueness scoring. A column qualifies when:
+      1. Its AI-assigned ``semantic_type`` is an identifier (PAN, GSTIN,
+         account_number, numeric_id, alphanumeric_id, …) OR the AI marked
+         it as a CDE (``recommended=true``) with a key-shaped type.
+      2. Among non-null values it is mostly unique (ratio ≥ 0.95).
+
+    Step (2) excludes foreign-key lookup columns that the AI legitimately
+    tags ``account_number`` / ``numeric_id`` but which by design repeat
+    across rows in a master record — e.g. NetSuite customer.subsidiary,
+    customer.salesrep, customer.receivablesaccount. Without this filter
+    a single FK column with 8/9 duplicates drives Uniqueness to ~10%
+    even though id / entityid are 100% unique.
     """
     if not glossary:
         return []
-    out: List[str] = []
+    candidates: List[str] = []
     for col in df.columns:
         name = str(col)
         entry = glossary.get(name)
@@ -253,7 +260,7 @@ def _detect_identifier_columns(df: pd.DataFrame, glossary: Optional[Dict[str, An
             continue
         stype = _semantic_type_of(name, glossary)
         if stype and stype in _IDENTIFIER_SEMANTIC_TYPES:
-            out.append(name)
+            candidates.append(name)
             continue
         # Fall back: if the AI flagged this as a CDE *and* the type is
         # something key-shaped (recommended primary identifier without an
@@ -266,6 +273,21 @@ def _detect_identifier_columns(df: pd.DataFrame, glossary: Optional[Dict[str, An
             "email", "phone", "url", "date", "datetime", "amount", "quantity",
             "percentage", "boolean", "iso_country", "iso_currency",
         }:
+            candidates.append(name)
+
+    # Filter to candidates that actually behave like identifiers (mostly
+    # unique among non-null values). FK columns that repeat by design fall
+    # out here.
+    out: List[str] = []
+    for name in candidates:
+        try:
+            series = df[name].dropna()
+            if series.empty:
+                continue
+            ratio = series.nunique() / len(series)
+        except Exception:
+            continue
+        if ratio >= 0.95:
             out.append(name)
     return out
 
@@ -391,6 +413,11 @@ def _score_standardisation(df: pd.DataFrame, glossary: Optional[Dict[str, Any]] 
     if not string_cols:
         return DimensionScore("Standardisation", 1.0, "Strong",
                               "No text columns to evaluate.", "—", "Low")
+    # Use the same 5-bucket case detection as the Standardisation drill-down
+    # (upper / lower / title / mixed / other) — otherwise Title-Case columns
+    # like vendor names get lumped into a single "mixed" bucket and report
+    # 100% consistency on the top card while the drill-down shows 70%.
+    from .standardisation_report import _detect_case
     per_col: List[Tuple[str, float]] = []
     total_values = 0
     total_off_pattern = 0
@@ -398,14 +425,13 @@ def _score_standardisation(df: pd.DataFrame, glossary: Optional[Dict[str, Any]] 
         s = df[col].dropna().astype(str)
         if s.empty:
             continue
-        upper = int((s.str.upper() == s).sum())
-        lower = int((s.str.lower() == s).sum())
-        mixed = int(len(s)) - upper - lower
-        dominant = max(upper, lower, mixed)
-        off = int(len(s)) - dominant
+        cases = s.map(_detect_case)
+        counts = cases.value_counts()
+        dominant_count = int(counts.iloc[0]) if len(counts) else 0
+        off = int(len(s)) - dominant_count
         total_values += int(len(s))
         total_off_pattern += off
-        per_col.append((col, dominant / len(s)))
+        per_col.append((col, dominant_count / len(s)))
     if total_values == 0:
         return DimensionScore("Standardisation", 1.0, "Strong",
                               "Text columns are blank — nothing to score.", "—", "Low", enabled=False)

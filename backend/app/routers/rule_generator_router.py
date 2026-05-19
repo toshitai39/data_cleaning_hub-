@@ -50,7 +50,7 @@ from ..services.azure_openai_config import AzureOpenAIConfig
 from ..services.dq_rg_mapping import rg_row_to_applied_rule
 from ..services.dq_engine import default_config as _dq_default_config
 from ..services.project_storage import save_dq_config, save_rules
-from ..services.cross_field_engine import _run_llm_expression
+from ..services.cross_field_engine import _run_llm_expression, evaluate_cross_field_rule
 from ..services.stream_context import build_project_context
 from ..services.rule_generator import (
     evaluate_cross_field_rules_in_df,
@@ -299,6 +299,38 @@ def _drop_unverifiable_accuracy_rows(df: pd.DataFrame) -> pd.DataFrame:
     return df.loc[~drop_mask].reset_index(drop=True)
 
 
+def _refresh_cross_field_issue_counts(df: pd.DataFrame, sess: SessionData) -> pd.DataFrame:
+    """Re-evaluate every Cross-field Validation row against the current
+    ``sess.df`` and overwrite its ``Issues Found`` / ``Issues Found Example``
+    columns.
+
+    The counts on disk were frozen at generation time, but executor logic
+    can evolve (e.g. composite_unique now excludes all-null tuples). Without
+    this refresh the Rule Generator view shows stale numbers while the
+    Cleansing view, which re-runs the executor on every fetch, shows the
+    correct ones — a real source of confusion for the user.
+    """
+    if df is None or df.empty or "Dimension" not in df.columns or sess.df is None:
+        return df
+    cross_mask = df["Dimension"].astype(str).str.strip() == "Cross-field Validation"
+    if not cross_mask.any():
+        return df
+    for idx in df.index[cross_mask]:
+        rule_text = str(df.at[idx, "Data Quality Rule"]) if "Data Quality Rule" in df.columns else ""
+        if not rule_text:
+            continue
+        try:
+            result = evaluate_cross_field_rule(rule_text, sess.df)
+        except Exception as exc:
+            logger.warning("refresh cross-field count failed on %r: %s", rule_text[:60], exc)
+            continue
+        if "Issues Found" in df.columns:
+            df.at[idx, "Issues Found"] = int(result.count)
+        if "Issues Found Example" in df.columns:
+            df.at[idx, "Issues Found Example"] = result.example
+    return df
+
+
 @router.get("/rules")
 def get_rules(sess: SessionData = Depends(require_dataframe)) -> dict:
     """Return the AI-generated rules dataframe only.
@@ -323,6 +355,11 @@ def get_rules(sess: SessionData = Depends(require_dataframe)) -> dict:
     # adds inferred regexes from column names, which would mask the filter.
     df = _drop_unverifiable_accuracy_rows(df)
     df = enrich_dataframe_regex_patterns(df)
+    # Refresh cross-field issue counts so this endpoint agrees with the
+    # Cleansing tab. Without this the two views diverge whenever executor
+    # logic changes (the user's "Why does Data Quality Rules show 6 issues
+    # while Cleansing shows 0?" complaint).
+    df = _refresh_cross_field_issue_counts(df, sess)
 
     return {
         "generated": True,

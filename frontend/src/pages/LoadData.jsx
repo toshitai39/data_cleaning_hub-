@@ -7,6 +7,7 @@ import api from '../api.js';
 import PageHeader from '../components/PageHeader.jsx';
 import ContentCard from '../components/ContentCard.jsx';
 import { useDataset } from '../context/DatasetContext.jsx';
+import { useProject } from '../context/ProjectContext.jsx';
 import HeaderConfigurator from './loaddata/HeaderConfigurator.jsx';
 import DataStatus from './loaddata/DataStatus.jsx';
 import DbConnector from './loaddata/DbConnector.jsx';
@@ -23,6 +24,8 @@ const FORMATS = [
 
 export default function LoadData() {
   const { state, refresh } = useDataset();
+  const { active } = useProject();
+  const isLiveConnector = active?.system?.id === 'netsuite';
   const [staged, setStaged] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -74,7 +77,9 @@ export default function LoadData() {
     <>
       <PageHeader
         title="Load data"
-        subtitle="Upload a dataset or connect a database. The pipeline runs on the active file until you reset or load a different one."
+        subtitle={isLiveConnector
+          ? "Connect to NetSuite and fetch master data via SuiteQL. The pipeline runs on the loaded dataset until you reset or reload."
+          : "Upload a dataset or connect a database. The pipeline runs on the active file until you reset or load a different one."}
       />
 
       {/* NetSuite live-connector panel — credential form + stream loader.
@@ -86,7 +91,7 @@ export default function LoadData() {
           and live-connector projects this component returns null. */}
       <ProjectTables />
 
-      {!state.loaded && (
+      {!state.loaded && !isLiveConnector && (
         <ContentCard sx={{ mb: 2.5 }}>
           <Grid container spacing={2.5}>
             <Grid item xs={12} md={8}>
@@ -199,7 +204,7 @@ export default function LoadData() {
         />
       )}
 
-      <DbConnector onLoaded={handleLoaded} />
+      {!isLiveConnector && <DbConnector onLoaded={handleLoaded} />}
     </>
   );
 }

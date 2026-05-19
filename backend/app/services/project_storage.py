@@ -25,7 +25,10 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-_STORAGE_ROOT = Path(__file__).resolve().parents[3] / "backend" / "storage" / "projects"
+_STORAGE_ROOT = (
+    Path.home() / "Library" / "Application Support" / "MasterDataProfiler"
+    / "storage" / "projects"
+)
 _STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
 
 
@@ -56,8 +59,23 @@ def save_working(
     try:
         if df is not None:
             df.to_parquet(working_path(project_id), index=False)
-        if original_df is not None and not original_path(project_id).exists():
-            original_df.to_parquet(original_path(project_id), index=False)
+        # Original.parquet must be the immutable as-loaded baseline, so we
+        # never overwrite a valid one. Two guards: refuse to write an empty
+        # frame (would poison the cache and break the Initial Dashboard),
+        # and treat an existing 0-row/0-col parquet as if it never existed
+        # so the next real save can heal it.
+        if original_df is not None and not original_df.empty and len(original_df.columns) > 0:
+            op = original_path(project_id)
+            needs_write = not op.exists()
+            if not needs_write:
+                try:
+                    existing = pd.read_parquet(op)
+                    if existing.empty or len(existing.columns) == 0:
+                        needs_write = True
+                except Exception:
+                    needs_write = True
+            if needs_write:
+                original_df.to_parquet(op, index=False)
     except Exception as exc:
         logger.error("save_working(%s) failed: %s", project_id, exc)
 

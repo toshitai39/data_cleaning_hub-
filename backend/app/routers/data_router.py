@@ -729,7 +729,12 @@ def get_columns_of_interest(
     # the column set changes (different fingerprint). A cache that contains
     # *only* fallback entries (no successful AI rows) is treated as missing
     # so a previously-poisoned cache can self-heal on the next reload.
-    fingerprint = _cde_fingerprint(all_cols)
+    # Fingerprint by the ACTUAL data columns (not canonical+extras) so the
+    # reader in profile_router._resolve_glossary, which only sees sess.df,
+    # produces the same key. Mismatching keys here previously caused the
+    # Validation dimension to report "AI column classification missing"
+    # right after a successful classify.
+    fingerprint = _cde_fingerprint(data_cols)
     cached_meta: Optional[Dict[str, Dict[str, Any]]] = None
     if project is not None:
         cached_meta = load_cde_meta(project.id, fingerprint)
@@ -848,7 +853,8 @@ def generate_columns_glossary(
             frame_cols[col] = _pd.Series([], dtype="object")
     df_for_llm = _pd.DataFrame(frame_cols)
 
-    fingerprint = _cde_fingerprint(all_cols)
+    # Fingerprint by ACTUAL data columns — see comment in get_columns_of_interest.
+    fingerprint = _cde_fingerprint(data_cols)
 
     if not _llm_available():
         # Credentials missing: hand back the dtype fallback but DO NOT cache —

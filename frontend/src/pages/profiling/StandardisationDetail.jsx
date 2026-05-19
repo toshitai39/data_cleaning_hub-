@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import {
   Box, Typography, Paper, Chip, Stack, Alert, LinearProgress,
   Table, TableHead, TableBody, TableRow, TableCell, TableContainer, Tooltip,
@@ -113,30 +113,57 @@ export default function StandardisationDetail() {
               const tone = c.consistency_rate >= 0.99 ? { fg: '#0E5226', bg: '#DCFCE7' }
                        : c.consistency_rate >= 0.90 ? { fg: '#7F5F00', bg: '#FEF3C7' }
                        :                              { fg: '#7F1D1D', bg: '#FBEAEA' };
+              const samples = c.samples_off_pattern || [];
               return (
-                <TableRow key={c.column} hover>
-                  <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.84rem', fontWeight: 600 }}>{c.column}</TableCell>
-                  <TableCell>
-                    <Chip
-                      size="small"
-                      label={c.dominant}
-                      sx={{ height: 20, fontSize: '0.68rem', fontWeight: 700, color: CASE_TONE[c.dominant], bgcolor: '#F1F5F9', border: 'none', textTransform: 'uppercase' }}
-                    />
-                  </TableCell>
-                  <TableCell sx={{ minWidth: 160 }}>
-                    <CaseStack counts={c.counts} dominant={c.dominant} />
-                  </TableCell>
-                  <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: c.off_pattern > 0 ? '#7F1D1D' : '#8A8A8A', fontWeight: c.off_pattern > 0 ? 700 : 400 }}>
-                    {c.off_pattern.toLocaleString()}
-                  </TableCell>
-                  <TableCell>
-                    <Chip
-                      size="small"
-                      label={`${(c.consistency_rate * 100).toFixed(1)}%`}
-                      sx={{ height: 22, fontSize: '0.7rem', fontWeight: 700, color: tone.fg, bgcolor: tone.bg, border: 'none' }}
-                    />
-                  </TableCell>
-                </TableRow>
+                <Fragment key={c.column}>
+                  <TableRow hover>
+                    <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.84rem', fontWeight: 600, borderBottom: samples.length ? 'none' : undefined }}>{c.column}</TableCell>
+                    <TableCell sx={{ borderBottom: samples.length ? 'none' : undefined }}>
+                      <Chip
+                        size="small"
+                        label={c.dominant}
+                        sx={{ height: 20, fontSize: '0.68rem', fontWeight: 700, color: CASE_TONE[c.dominant], bgcolor: '#F1F5F9', border: 'none', textTransform: 'uppercase' }}
+                      />
+                    </TableCell>
+                    <TableCell sx={{ minWidth: 160, borderBottom: samples.length ? 'none' : undefined }}>
+                      <CaseStack counts={c.counts} dominant={c.dominant} />
+                    </TableCell>
+                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: c.off_pattern > 0 ? '#7F1D1D' : '#8A8A8A', fontWeight: c.off_pattern > 0 ? 700 : 400, borderBottom: samples.length ? 'none' : undefined }}>
+                      {c.off_pattern.toLocaleString()}
+                    </TableCell>
+                    <TableCell sx={{ borderBottom: samples.length ? 'none' : undefined }}>
+                      <Chip
+                        size="small"
+                        label={`${(c.consistency_rate * 100).toFixed(1)}%`}
+                        sx={{ height: 22, fontSize: '0.7rem', fontWeight: 700, color: tone.fg, bgcolor: tone.bg, border: 'none' }}
+                      />
+                    </TableCell>
+                  </TableRow>
+                  {samples.length > 0 && (
+                    <TableRow>
+                      <TableCell colSpan={5} sx={{ py: 1, pl: 3, bgcolor: '#FBFAFC' }}>
+                        <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+                          <Typography sx={{ fontSize: '0.7rem', fontWeight: 700, color: '#7F1D1D', textTransform: 'uppercase', letterSpacing: '0.06em', mr: 0.5 }}>
+                            Off-pattern examples
+                          </Typography>
+                          {samples.map((s, i) => (
+                            <Chip
+                              key={i}
+                              size="small"
+                              label={`row ${s.row}: ${s.value}`}
+                              sx={{ height: 22, fontSize: '0.74rem', bgcolor: '#FFFFFF', border: '1px solid #DDD6E5', fontFamily: 'monospace', color: '#1A1A1A' }}
+                            />
+                          ))}
+                          {c.off_pattern > samples.length && (
+                            <Typography sx={{ fontSize: '0.74rem', color: '#8A8A8A', ml: 0.5 }}>
+                              + {(c.off_pattern - samples.length).toLocaleString()} more
+                            </Typography>
+                          )}
+                        </Stack>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </Fragment>
               );
             })}
           </TableBody>

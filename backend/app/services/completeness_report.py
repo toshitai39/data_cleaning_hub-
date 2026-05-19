@@ -129,6 +129,14 @@ def compute_completeness_report(
             cde_cells += rows
             cde_filled += filled
 
+        # Up to 5 row indexes where this column is blank — so the drill-down
+        # can show "which rows are missing this field" instead of just a count.
+        samples_blank: List[Dict[str, Any]] = []
+        if blank > 0:
+            blank_idx = series.isna().to_numpy().nonzero()[0]
+            for i in blank_idx[:5]:
+                samples_blank.append({"row": int(i) + 1})
+
         field_records.append({
             "field": name,
             "total": rows,
@@ -138,6 +146,7 @@ def compute_completeness_report(
             "status": _status_for(fill_rate, is_cde),
             "semantic_type": semantic_type,
             "is_cde": is_cde,
+            "samples_blank": samples_blank,
         })
 
     # Sort ascending by fill rate so the worst fields surface first; ties

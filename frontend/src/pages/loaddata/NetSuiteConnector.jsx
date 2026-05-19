@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import {
   Box, Stack, Typography, Button, Chip, Alert, LinearProgress, IconButton,
-  TextField, Grid, Tooltip, Divider,
+  TextField, Grid, Tooltip, Divider, Checkbox, InputAdornment,
 } from '@mui/material';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import LinkOutlinedIcon from '@mui/icons-material/LinkOutlined';
@@ -9,6 +9,8 @@ import LinkOffOutlinedIcon from '@mui/icons-material/LinkOffOutlined';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import VisibilityOffOutlinedIcon from '@mui/icons-material/VisibilityOffOutlined';
 import CloudSyncOutlinedIcon from '@mui/icons-material/CloudSyncOutlined';
+import SearchOutlinedIcon from '@mui/icons-material/SearchOutlined';
+import StorageOutlinedIcon from '@mui/icons-material/StorageOutlined';
 import api from '../../api.js';
 import ContentCard from '../../components/ContentCard.jsx';
 import { useProject } from '../../context/ProjectContext.jsx';
@@ -16,19 +18,13 @@ import { useDataset } from '../../context/DatasetContext.jsx';
 
 const FIELD_SX = { '& .MuiInputBase-input': { fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 13 } };
 
-function SecretField({ label, value, onChange, autoComplete }) {
-  // Tokens are long opaque blobs — peek toggle lets the steward verify
-  // a paste before submitting without re-revealing on every keystroke.
+function SecretField({ label, value, onChange }) {
   const [show, setShow] = useState(false);
   return (
     <TextField
-      fullWidth
-      size="small"
-      label={label}
-      value={value}
+      fullWidth size="small" label={label} value={value}
       onChange={(e) => onChange(e.target.value)}
-      type={show ? 'text' : 'password'}
-      autoComplete={autoComplete || 'off'}
+      type={show ? 'text' : 'password'} autoComplete="off"
       sx={FIELD_SX}
       InputProps={{
         endAdornment: (
@@ -47,21 +43,23 @@ export default function NetSuiteConnector({ onLoaded }) {
 
   const [status, setStatus] = useState({ saved: false });
   const [statusLoaded, setStatusLoaded] = useState(false);
-  const [streams, setStreams] = useState([]);   // catalog of all NetSuite streams
-  const [stream, setStream] = useState(null);   // the one matching the active project
 
-  // Credential form
+  // Credential form fields
   const [accountId, setAccountId] = useState('');
   const [consumerKey, setConsumerKey] = useState('');
   const [consumerSecret, setConsumerSecret] = useState('');
   const [tokenId, setTokenId] = useState('');
   const [tokenSecret, setTokenSecret] = useState('');
 
+  // Dynamic table discovery
+  const [availableTables, setAvailableTables] = useState(null); // null = not yet fetched
+  const [tableSearch, setTableSearch] = useState('');
+  const [selectedTables, setSelectedTables] = useState([]); // ordered: first = primary
+
   // UI state
   const [busy, setBusy] = useState(false);
-  const [testResult, setTestResult] = useState(null);     // {ok, message}
-  const [savedResult, setSavedResult] = useState(null);   // {ok, message}
-  const [loadResult, setLoadResult] = useState(null);     // {ok, message}
+  const [testResult, setTestResult] = useState(null);
+  const [loadResult, setLoadResult] = useState(null);
   const [error, setError] = useState('');
 
   const isNetSuiteProject = active?.system?.id === 'netsuite';
@@ -77,30 +75,18 @@ export default function NetSuiteConnector({ onLoaded }) {
     }
   };
 
-  const loadStreams = async () => {
-    try {
-      const { data } = await api.get('/netsuite/streams');
-      setStreams(data?.streams || []);
-    } catch (_) {
-      setStreams([]);
-    }
-  };
-
   useEffect(() => {
     if (!isNetSuiteProject) return;
     loadStatus();
-    loadStreams();
-    // Reset transient banners when the active project changes.
     setTestResult(null);
-    setSavedResult(null);
     setLoadResult(null);
     setError('');
+    setAvailableTables(null);
+    setSelectedTables([]);
+    setTableSearch('');
   }, [isNetSuiteProject, active?.id]);
 
-  useEffect(() => {
-    if (!active?.stream?.id) { setStream(null); return; }
-    setStream(streams.find((s) => s.id === active.stream.id) || null);
-  }, [streams, active?.stream?.id]);
+  // ── Credential form helpers ────────────────────────────────────────────
 
   const credentialsBody = () => ({
     account_id: accountId.trim(),
@@ -110,29 +96,18 @@ export default function NetSuiteConnector({ onLoaded }) {
     token_secret: tokenSecret.trim(),
   });
 
-  const canSubmit = () => {
-    const b = credentialsBody();
-    return Object.values(b).every((v) => v.length > 0);
-  };
+  const canSubmit = () => Object.values(credentialsBody()).every((v) => v.length > 0);
 
   const testConnection = async () => {
     if (!canSubmit()) return;
     setBusy(true); setError(''); setTestResult(null);
     try {
       const { data } = await api.post('/netsuite/test-connection', credentialsBody());
-      if (data?.ok) {
-        setTestResult({
-          ok: true,
-          message: `Connected to ${data.account_label}. NetSuite returned ${data.rows_returned ?? 1} heartbeat row.`,
-        });
-      } else {
-        setTestResult({ ok: false, message: data?.error || 'Connection failed' });
-      }
+      setTestResult(data?.ok
+        ? { ok: true, message: `Connected to ${data.account_label}. NetSuite returned ${data.rows_returned ?? 1} heartbeat row.` }
+        : { ok: false, message: data?.error || 'Connection failed' });
     } catch (e) {
-      setTestResult({
-        ok: false,
-        message: e?.response?.data?.detail || 'Connection test failed',
-      });
+      setTestResult({ ok: false, message: e?.response?.data?.detail || 'Connection test failed' });
     } finally {
       setBusy(false);
     }
@@ -140,12 +115,9 @@ export default function NetSuiteConnector({ onLoaded }) {
 
   const saveConnection = async () => {
     if (!canSubmit()) return;
-    setBusy(true); setError(''); setSavedResult(null);
+    setBusy(true); setError('');
     try {
-      const { data } = await api.post('/netsuite/credentials', credentialsBody());
-      setSavedResult({ ok: true, message: `Saved encrypted credentials for ${data.account_label}.` });
-      // Clear the form so the secrets aren't sitting in DOM state any longer
-      // than necessary — the steward can re-enter them if they want to rotate.
+      await api.post('/netsuite/credentials', credentialsBody());
       setConsumerKey(''); setConsumerSecret(''); setTokenId(''); setTokenSecret('');
       await loadStatus();
     } catch (e) {
@@ -156,8 +128,8 @@ export default function NetSuiteConnector({ onLoaded }) {
   };
 
   const disconnect = async () => {
-    if (!window.confirm('Remove the saved NetSuite credentials for this project? You will need to re-enter them next time.')) return;
-    setBusy(true); setError(''); setSavedResult(null); setLoadResult(null);
+    if (!window.confirm('Remove the saved NetSuite credentials for this project?')) return;
+    setBusy(true); setError(''); setLoadResult(null); setAvailableTables(null); setSelectedTables([]);
     try {
       await api.delete('/netsuite/credentials');
       await loadStatus();
@@ -168,17 +140,50 @@ export default function NetSuiteConnector({ onLoaded }) {
     }
   };
 
-  const loadStream = async (primaryOnly) => {
-    if (!stream) return;
+  // ── Dynamic table discovery ────────────────────────────────────────────
+
+  const discoverTables = async () => {
+    setBusy(true); setError(''); setAvailableTables(null); setSelectedTables([]);
+    try {
+      const { data } = await api.get('/netsuite/available-tables?probe=true');
+      setAvailableTables(data?.tables || []);
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'Could not discover tables — check token permissions.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleTable = (tableName) => {
+    setSelectedTables((prev) =>
+      prev.includes(tableName) ? prev.filter((t) => t !== tableName) : [...prev, tableName]
+    );
+  };
+
+  const filteredTables = useMemo(() => {
+    if (!availableTables) return [];
+    const q = tableSearch.toLowerCase();
+    return q ? availableTables.filter((t) => t.toLowerCase().includes(q)) : availableTables;
+  }, [availableTables, tableSearch]);
+
+  const loadTables = async () => {
+    if (selectedTables.length === 0) return;
     setBusy(true); setError(''); setLoadResult(null);
     try {
-      const body = { stream: stream.id, primary_only: !!primaryOnly, row_limit: 1000 };
-      const { data } = await api.post('/netsuite/load-stream', body);
-      const tablesLoaded = (data?.loaded || []).length;
-      setLoadResult({
-        ok: true,
-        message: `Loaded ${data?.primary_rows?.toLocaleString()} rows × ${data?.primary_columns} columns from the primary table (${tablesLoaded} table${tablesLoaded === 1 ? '' : 's'} fetched).`,
+      const { data } = await api.post('/netsuite/load-tables', {
+        tables: selectedTables,
+        row_limit: 1000,
       });
+      const loaded = (data?.loaded || []).length;
+      const skipped = (data?.skipped || []).length;
+      let message = `Loaded ${data?.primary_rows?.toLocaleString()} rows × ${data?.primary_columns} critical data elements from ${selectedTables[0]}`;
+      if (loaded > 1) message += ` + ${loaded - 1} supplementary table${loaded - 1 === 1 ? '' : 's'}`;
+      message += '.';
+      if (skipped > 0) {
+        const names = (data.skipped || []).map((s) => s.table).join(', ');
+        message += ` Skipped (no permission): ${names}.`;
+      }
+      setLoadResult({ ok: true, message });
       await Promise.all([refreshProjects(), refreshDataset()]);
       onLoaded?.();
     } catch (e) {
@@ -193,47 +198,34 @@ export default function NetSuiteConnector({ onLoaded }) {
 
   return (
     <ContentCard sx={{ mb: 2.5, p: 2.5 }}>
+      {/* Header */}
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.5 }}>
         <CloudSyncOutlinedIcon sx={{ color: '#6A28A8' }} />
-        <Typography
-          sx={{
-            fontFamily: "'Montserrat', sans-serif",
-            fontSize: 17,
-            fontWeight: 700,
-            color: '#1A1A1A',
-          }}
-        >
+        <Typography sx={{ fontFamily: "'Montserrat', sans-serif", fontSize: 17, fontWeight: 700, color: '#1A1A1A' }}>
           NetSuite connection
         </Typography>
         {status.saved && (
-          <Chip
-            size="small"
-            label="Connected"
-            sx={{ height: 20, fontSize: '0.7rem', bgcolor: '#E6F4EC', color: '#2F8F57', fontWeight: 700 }}
-          />
+          <Chip size="small" label="Connected"
+            sx={{ height: 20, fontSize: '0.7rem', bgcolor: '#E6F4EC', color: '#2F8F57', fontWeight: 700 }} />
         )}
       </Stack>
       <Typography sx={{ fontSize: 12.5, color: '#555555', mb: 2 }}>
-        Token-Based Authentication (TBA). Credentials are encrypted at rest and only sent to NetSuite over HTTPS — never logged or persisted in plaintext.
+        Token-Based Authentication (TBA). Credentials are only sent to NetSuite over HTTPS — never logged or persisted in plaintext.
       </Typography>
 
       {busy && <LinearProgress sx={{ mb: 1.5 }} />}
       {error && <Alert severity="error" sx={{ mb: 1.5 }}>{error}</Alert>}
 
+      {/* ── Credential entry form (when not yet connected) ── */}
       {!status.saved && (
         <Box>
           <Grid container spacing={1.5}>
             <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                size="small"
-                label="Account ID"
-                placeholder="e.g. XX1234567 (or XX1234567_SB1 for sandbox)"
-                value={accountId}
-                onChange={(e) => setAccountId(e.target.value)}
-                sx={FIELD_SX}
-                helperText="From Setup → Company → Company Information."
-              />
+              <TextField fullWidth size="small" label="Account ID"
+                placeholder="e.g. XXXXXXXX (or XXXXXXXX_SB1 for sandbox)"
+                value={accountId} onChange={(e) => setAccountId(e.target.value)}
+                autoComplete="off" inputProps={{ autoComplete: 'off' }}
+                sx={FIELD_SX} helperText="Setup → Company → Company Information." />
             </Grid>
             <Grid item xs={12} sm={6}>
               <SecretField label="Consumer Key" value={consumerKey} onChange={setConsumerKey} />
@@ -254,32 +246,20 @@ export default function NetSuiteConnector({ onLoaded }) {
               {testResult.message}
             </Alert>
           )}
-          {savedResult && (
-            <Alert severity="success" sx={{ mt: 1.5 }}>
-              {savedResult.message}
-            </Alert>
-          )}
 
           <Stack direction="row" spacing={1.5} sx={{ mt: 2 }}>
-            <Button
-              variant="outlined"
-              startIcon={<LinkOutlinedIcon />}
-              disabled={busy || !canSubmit()}
-              onClick={testConnection}
-            >
+            <Button variant="outlined" startIcon={<LinkOutlinedIcon />}
+              disabled={busy || !canSubmit()} onClick={testConnection}>
               Test connection
             </Button>
-            <Button
-              variant="contained"
-              disabled={busy || !canSubmit()}
-              onClick={saveConnection}
-            >
+            <Button variant="contained" disabled={busy || !canSubmit()} onClick={saveConnection}>
               Save &amp; connect
             </Button>
           </Stack>
         </Box>
       )}
 
+      {/* ── Connected state ── */}
       {status.saved && (
         <Box>
           <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.5 }}>
@@ -287,141 +267,158 @@ export default function NetSuiteConnector({ onLoaded }) {
               <CheckCircleOutlineIcon sx={{ color: '#2F8F57' }} />
               <Box>
                 <Typography sx={{ fontSize: 13.5, fontWeight: 700, color: '#1A1A1A' }}>
-                  Account {status.account_label_masked || status.account_label}
+                  Account {status.account_label || status.account_label_masked}
                 </Typography>
                 <Typography sx={{ fontSize: 11.5, color: '#8A8A8A' }}>
-                  Credentials are encrypted on this project and ready to fetch.
+                  {status.via_env
+                    ? 'Connected via system configuration — no setup required.'
+                    : 'Credentials saved for this project.'}
                 </Typography>
               </Box>
             </Stack>
-            <Tooltip title="Remove saved NetSuite credentials from this project">
-              <span>
-                <Button
-                  variant="text"
-                  size="small"
-                  startIcon={<LinkOffOutlinedIcon />}
-                  onClick={disconnect}
-                  disabled={busy}
-                  sx={{ color: '#8A4848' }}
-                >
-                  Disconnect
-                </Button>
-              </span>
-            </Tooltip>
+            {!status.via_env && (
+              <Tooltip title="Remove saved credentials from this project">
+                <span>
+                  <Button variant="text" size="small" startIcon={<LinkOffOutlinedIcon />}
+                    onClick={disconnect} disabled={busy} sx={{ color: '#8A4848' }}>
+                    Disconnect
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
           </Stack>
 
           <Divider sx={{ my: 1.5 }} />
 
-          {!stream && (
-            <Alert severity="warning">
-              This project's stream ({active?.stream?.label}) doesn't have a NetSuite query template yet.
-            </Alert>
-          )}
-
-          {stream && (
+          {/* Discover tables */}
+          <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
             <Box>
-              <Typography
-                sx={{
-                  fontFamily: "'Montserrat', sans-serif",
-                  fontSize: 14,
-                  fontWeight: 700,
-                  color: '#1A1A1A',
-                  mb: 0.5,
-                }}
-              >
-                Fetch {stream.label}
+              <Typography sx={{ fontFamily: "'Montserrat', sans-serif", fontSize: 14, fontWeight: 700, color: '#1A1A1A' }}>
+                Select tables to load
               </Typography>
-              <Typography sx={{ fontSize: 12.5, color: '#555555', mb: 1.5 }}>
-                Pulls every supported table for this stream via SuiteQL. The primary table is loaded as the working dataset; extension and lookup tables are stashed for multi-table joins.
+              <Typography sx={{ fontSize: 12.5, color: '#555555' }}>
+                Discover which tables your token can access, then pick the ones you want.
+                The first selected table becomes the working dataset.
               </Typography>
+            </Box>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<StorageOutlinedIcon />}
+              disabled={busy}
+              onClick={discoverTables}
+              sx={{ whiteSpace: 'nowrap', ml: 2 }}
+            >
+              {availableTables === null ? 'Discover tables' : 'Refresh'}
+            </Button>
+          </Stack>
 
-              <Box
-                sx={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-                  gap: 1.25,
-                  mb: 2,
-                }}
-              >
-                {stream.tables.map((t) => (
+          {/* Table list */}
+          {availableTables !== null && (
+            <Box sx={{ mt: 1.5 }}>
+              {availableTables.length === 0 ? (
+                <Alert severity="warning">No tables found — the token may not have SuiteQL read access.</Alert>
+              ) : (
+                <>
+                  <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+                    <TextField
+                      size="small"
+                      placeholder={`Search ${availableTables.length} tables…`}
+                      value={tableSearch}
+                      onChange={(e) => setTableSearch(e.target.value)}
+                      sx={{ flex: 1 }}
+                      InputProps={{
+                        startAdornment: (
+                          <InputAdornment position="start">
+                            <SearchOutlinedIcon fontSize="small" sx={{ color: '#AAAAAA' }} />
+                          </InputAdornment>
+                        ),
+                      }}
+                    />
+                    <Typography sx={{ fontSize: 12, color: '#8A8A8A', whiteSpace: 'nowrap' }}>
+                      {selectedTables.length} selected
+                    </Typography>
+                    {selectedTables.length > 0 && (
+                      <Button size="small" onClick={() => setSelectedTables([])}>Clear</Button>
+                    )}
+                  </Stack>
+
                   <Box
-                    key={t.id}
                     sx={{
+                      maxHeight: 260,
+                      overflowY: 'auto',
                       border: '1px solid #E7E6E6',
                       borderRadius: 1,
-                      bgcolor: '#FBFAFC',
-                      px: 1.5,
-                      py: 1.25,
+                      bgcolor: '#FAFAFA',
                     }}
                   >
-                    <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.5 }}>
-                      <Typography
-                        sx={{
-                          fontFamily: 'ui-monospace, Menlo, monospace',
-                          fontSize: 12,
-                          fontWeight: 700,
-                          color: '#6A28A8',
-                        }}
-                      >
-                        {t.id}
-                      </Typography>
-                      <Chip
-                        size="small"
-                        label={t.role || 'primary'}
-                        variant="outlined"
-                        sx={{ height: 18, fontSize: '0.65rem' }}
-                      />
-                      {t.required && (
-                        <Chip
-                          size="small"
-                          label="required"
-                          sx={{ height: 18, fontSize: '0.65rem', bgcolor: '#FBEAEA', color: '#D14343' }}
-                        />
-                      )}
-                      {!t.has_query && (
-                        <Chip
-                          size="small"
-                          label="no template"
-                          sx={{ height: 18, fontSize: '0.65rem', bgcolor: '#F1ECF6', color: '#8A8A8A' }}
-                        />
-                      )}
-                    </Stack>
-                    <Typography sx={{ fontSize: 12.5, fontWeight: 600, color: '#1A1A1A' }}>
-                      {t.label}
-                    </Typography>
-                    {t.description && (
-                      <Typography sx={{ fontSize: 11.5, color: '#8A8A8A', mt: 0.25 }}>
-                        {t.description}
+                    {filteredTables.map((tableName) => {
+                      const isChecked = selectedTables.includes(tableName);
+                      const isPrimary = selectedTables[0] === tableName;
+                      return (
+                        <Stack
+                          key={tableName}
+                          direction="row"
+                          alignItems="center"
+                          spacing={1}
+                          onClick={() => toggleTable(tableName)}
+                          sx={{
+                            px: 1.5,
+                            py: 0.75,
+                            cursor: 'pointer',
+                            bgcolor: isChecked ? '#F4EEF9' : 'transparent',
+                            borderBottom: '1px solid #F0EFEF',
+                            '&:last-child': { borderBottom: 'none' },
+                            '&:hover': { bgcolor: isChecked ? '#EDE5F7' : '#F5F5F5' },
+                          }}
+                        >
+                          <Checkbox
+                            size="small"
+                            checked={isChecked}
+                            onChange={() => toggleTable(tableName)}
+                            onClick={(e) => e.stopPropagation()}
+                            sx={{ p: 0, color: '#6A28A8', '&.Mui-checked': { color: '#6A28A8' } }}
+                          />
+                          <Typography
+                            sx={{ fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 13, flex: 1, color: '#1A1A1A' }}
+                          >
+                            {tableName}
+                          </Typography>
+                          {isPrimary && (
+                            <Chip size="small" label="primary"
+                              sx={{ height: 18, fontSize: '0.65rem', bgcolor: '#EDE5F7', color: '#6A28A8', fontWeight: 700 }} />
+                          )}
+                        </Stack>
+                      );
+                    })}
+                    {filteredTables.length === 0 && (
+                      <Typography sx={{ p: 2, fontSize: 13, color: '#8A8A8A', textAlign: 'center' }}>
+                        No tables match "{tableSearch}"
                       </Typography>
                     )}
                   </Box>
-                ))}
-              </Box>
-
-              {loadResult && (
-                <Alert severity={loadResult.ok ? 'success' : 'error'} sx={{ mb: 1.5 }}>
-                  {loadResult.message}
-                </Alert>
+                </>
               )}
-
-              <Stack direction="row" spacing={1.5}>
-                <Button
-                  variant="outlined"
-                  disabled={busy}
-                  onClick={() => loadStream(true)}
-                >
-                  Primary table only
-                </Button>
-                <Button
-                  variant="contained"
-                  disabled={busy}
-                  onClick={() => loadStream(false)}
-                  sx={{ fontWeight: 700 }}
-                >
-                  {busy ? 'Loading from NetSuite…' : `Load all ${stream.tables.length} table${stream.tables.length === 1 ? '' : 's'}`}
-                </Button>
-              </Stack>
             </Box>
+          )}
+
+          {loadResult && (
+            <Alert severity={loadResult.ok ? 'success' : 'error'} sx={{ mt: 1.5 }}>
+              {loadResult.message}
+            </Alert>
+          )}
+
+          {availableTables !== null && selectedTables.length > 0 && (
+            <Button
+              variant="contained"
+              disabled={busy}
+              onClick={loadTables}
+              sx={{ mt: 1.5, fontWeight: 700 }}
+            >
+              {busy
+                ? 'Loading from NetSuite…'
+                : `Load ${selectedTables.length} table${selectedTables.length === 1 ? '' : 's'}`}
+            </Button>
           )}
         </Box>
       )}

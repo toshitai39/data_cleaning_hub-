@@ -34,11 +34,13 @@ from ..session_store import SessionData
 from ..services import credential_vault
 from ..services.netsuite_connector import (
     NetSuiteCredentials,
+    get_global_credentials,
     list_supported_streams,
     query_for_table,
     run_suiteql,
     test_connection,
 )
+from ..services.project_storage import save_table, save_working
 
 logger = logging.getLogger(__name__)
 
@@ -64,13 +66,20 @@ class LoadStreamBody(BaseModel):
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
-def _creds_from_project(project: Project) -> NetSuiteCredentials:
-    """Load + validate stored NetSuite creds for the active project."""
+def _resolve_creds(project: Project) -> NetSuiteCredentials:
+    """Return credentials for the active project.
+
+    Priority: global env vars (NETSUITE_*) → per-project encrypted vault.
+    Global env vars win so client deployments never need per-project setup.
+    """
+    global_creds = get_global_credentials()
+    if global_creds:
+        return global_creds
     payload = credential_vault.load_credentials(project, "netsuite")
     if not payload:
         raise HTTPException(
             status_code=400,
-            detail="No NetSuite credentials saved on this project — go to Load Data → NetSuite → Connect first.",
+            detail="No NetSuite credentials found. Ask your admin to set NETSUITE_* environment variables, or connect via Load Data → NetSuite.",
         )
     return NetSuiteCredentials(
         account_id=payload.get("account_id", ""),
@@ -161,13 +170,26 @@ def delete_netsuite_credentials(
 def netsuite_credentials_status(
     project: Project = Depends(require_active_project),
 ) -> Dict[str, Any]:
-    """Return whether credentials are saved + a masked preview of the
-    Account ID. Drives the connection-card "Connected" badge in the UI."""
+    """Return whether credentials are available + how they were sourced.
+
+    ``via_env=True``  → NETSUITE_* env vars are set; no per-project form needed.
+    ``via_env=False`` → credentials were saved manually for this project.
+    ``saved=False``   → no credentials anywhere; show the entry form.
+    """
+    global_creds = get_global_credentials()
+    if global_creds:
+        return {
+            "saved": True,
+            "via_env": True,
+            "account_label": global_creds.account_id,
+            "account_label_masked": _mask(global_creds.account_id),
+        }
     payload = credential_vault.load_credentials(project, "netsuite")
     if not payload:
-        return {"saved": False}
+        return {"saved": False, "via_env": False}
     return {
         "saved": True,
+        "via_env": False,
         "account_label_masked": _mask(payload.get("account_id", "")),
         "account_label": payload.get("account_id", ""),
     }
@@ -212,6 +234,182 @@ _STREAM_LABELS = {
 }
 
 
+_CURATED_SUITEQL_TABLES: List[str] = [
+    # Customer master
+    "customer", "customeraddressbook", "customercategory", "customerstatus",
+    "contact", "contactrole",
+    # Vendor master
+    "vendor", "vendoraddressbook", "vendorcategory",
+    # Items / material master
+    "item", "inventoryitem", "inventorybalance", "noninventoryitem",
+    "serviceitem", "kititem", "assemblyitem", "discountitem",
+    "pricing", "pricelevel",
+    # Employee master
+    "employee",
+    # GL / accounting
+    "account", "accountingperiod", "accountingbook", "department",
+    "classification", "location", "subsidiary",
+    # Currency
+    "currency", "currencyrate",
+    # Transactions (header + lines)
+    "transaction", "transactionline", "transactionaccountingline",
+    # Project / job
+    "job", "project", "projecttask",
+    # Misc reference
+    "partner", "salesrole", "role",
+]
+
+
+@router.get("/available-tables")
+def list_available_netsuite_tables(
+    project: Project = Depends(require_active_project),
+    probe: bool = False,
+) -> Dict[str, Any]:
+    """Return SuiteQL-queryable tables for the current credentials.
+
+    NetSuite's REST SuiteQL endpoint does NOT expose ``OA_TABLES`` (that's
+    the legacy ODBC catalog), so dynamic discovery via SQL isn't possible
+    over this transport. Instead we return a curated list of the master-
+    data + GL + transactional record types that SuiteQL universally
+    supports. The list is stable, well-documented, and avoids the trap
+    of showing record types the user's role can't read.
+
+    Set ``probe=true`` to also send a 1-row probe query to each table
+    and filter to the ones the current role can actually read. This
+    costs ~40 HTTP calls so it's opt-in.
+    """
+    creds = _resolve_creds(project)
+    tables = sorted(_CURATED_SUITEQL_TABLES)
+    if not probe:
+        return {"tables": tables, "count": len(tables)}
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _probe(t: str):
+        try:
+            run_suiteql(creds, f"SELECT id FROM {t}", limit=1)
+            return (t, None)
+        except RuntimeError as exc:
+            return (t, str(exc)[:160])
+
+    accessible: List[str] = []
+    inaccessible: List[Dict[str, str]] = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for table_name, err in pool.map(_probe, tables):
+            if err is None:
+                accessible.append(table_name)
+            else:
+                inaccessible.append({"table": table_name, "reason": err})
+    accessible.sort()
+    return {
+        "tables": accessible,
+        "count": len(accessible),
+        "probed": True,
+        "inaccessible": inaccessible,
+    }
+
+
+class LoadTablesBody(BaseModel):
+    tables: List[str] = Field(min_length=1)   # ordered; first entry = primary dataset
+    row_limit: int = Field(default=1000, ge=10, le=10000)
+
+
+@router.post("/load-tables")
+def load_netsuite_tables(
+    body: LoadTablesBody,
+    sess: SessionData = Depends(get_session),
+    project: Project = Depends(require_active_project),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Load arbitrary NetSuite tables by name with generic SELECT *.
+    No canned queries or stream definitions needed — works with any token.
+    The first table in the list becomes the primary working dataset;
+    the rest are stashed as supplementary tables."""
+    creds = _resolve_creds(project)
+
+    loaded: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    primary_df: Optional[pd.DataFrame] = None
+    tables_payload: Dict[str, Any] = {}
+
+    for i, table_name in enumerate(body.tables):
+        is_primary = (i == 0)
+        try:
+            df, qmeta = run_suiteql(creds, f"SELECT * FROM {table_name}", limit=body.row_limit)
+        except RuntimeError as exc:
+            if is_primary:
+                raise HTTPException(status_code=502, detail=str(exc))
+            logger.warning("Skipped table %s: %s", table_name, exc)
+            skipped.append({"table": table_name, "reason": str(exc)})
+            continue
+
+        role = "primary" if is_primary else "lookup"
+        tables_payload[table_name] = {
+            "filename": f"{table_name}.netsuite",
+            "rows": int(len(df)),
+            "columns": int(df.shape[1]),
+            "uploaded_at": datetime.utcnow().isoformat(),
+            "role": role,
+            "label": table_name,
+        }
+        loaded.append({
+            "table": table_name,
+            "role": role,
+            "rows": int(len(df)),
+            "columns": int(df.shape[1]),
+            "has_more": bool(qmeta.get("hasMore", False)),
+        })
+        if is_primary:
+            primary_df = df
+
+    sess.df = primary_df
+    sess.original_df = primary_df.copy()
+    sess.filename = f"NetSuite · {body.tables[0]}"
+    sess.column_profiles = {}
+    sess.quality_report = None
+    sess.exact_duplicates = []
+    sess.fuzzy_duplicates = []
+    sess.combined_duplicates = []
+    sess.fixes_applied = []
+    sess.validation_history = []
+    sess.reject_df = pd.DataFrame()
+    sess.applied_rules_by_dim = {}
+    sess.ai_validation_rules = None
+    sess.semantic_glossary = None
+    sess.columns_of_interest = []
+
+    primary_label = body.tables[0]
+    project.system_id = "netsuite"
+    project.system_label = "NetSuite"
+    project.stream_id = primary_label
+    project.stream_label = primary_label
+    project.dataset_filename = sess.filename
+    project.dataset_rows = int(len(primary_df))
+    project.dataset_columns = int(primary_df.shape[1])
+    project.dataset_size_bytes = None
+    project.tables_meta = tables_payload
+    project.status = "data_loaded"
+    db.commit()
+
+    save_working(project.id, primary_df, primary_df.copy())
+    for entry in loaded:
+        if entry["role"] != "primary":
+            t_id = entry["table"]
+            try:
+                df_aux, _ = run_suiteql(creds, f"SELECT * FROM {t_id}", limit=body.row_limit)
+                save_table(project.id, t_id, df_aux)
+            except RuntimeError:
+                pass
+
+    return {
+        "ok": True,
+        "loaded": loaded,
+        "skipped": skipped,
+        "primary_rows": int(len(primary_df)),
+        "primary_columns": int(primary_df.shape[1]),
+    }
+
+
 @router.post("/load-stream")
 def load_netsuite_stream(
     body: LoadStreamBody,
@@ -230,7 +428,7 @@ def load_netsuite_stream(
     Each table's SuiteQL query is pulled from
     ``netsuite_connector._STREAM_QUERIES``; the user doesn't write SQL.
     """
-    creds = _creds_from_project(project)
+    creds = _resolve_creds(project)
 
     schemas = STREAM_SCHEMAS.get(("netsuite", body.stream), [])
     if not schemas:
@@ -259,16 +457,28 @@ def load_netsuite_stream(
         )
 
     loaded: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
     primary_df: Optional[pd.DataFrame] = None
     tables_payload: Dict[str, Any] = {}
 
     for table_id in target_ids:
         meta = table_meta_by_id[table_id]
+        is_primary = meta.get("role") == "primary"
         query = query_for_table(body.stream, table_id)
         try:
             df, qmeta = run_suiteql(creds, query, limit=body.row_limit)
         except RuntimeError as exc:
-            raise HTTPException(status_code=502, detail=str(exc))
+            if is_primary:
+                # Primary table must succeed — the pipeline has nothing to work with otherwise.
+                raise HTTPException(status_code=502, detail=str(exc))
+            # Lookup / extension table — skip gracefully so the primary still loads.
+            logger.warning("Skipped non-primary table %s (%s): %s", table_id, body.stream, exc)
+            skipped.append({
+                "table": table_id,
+                "label": meta.get("label", table_id),
+                "reason": str(exc),
+            })
+            continue
 
         tables_payload[table_id] = {
             "filename": f"{table_id}.netsuite",
@@ -286,7 +496,7 @@ def load_netsuite_stream(
             "columns": int(df.shape[1]),
             "has_more": bool(qmeta.get("hasMore", False)),
         })
-        if meta.get("role") == "primary":
+        if is_primary:
             primary_df = df
 
     if primary_df is None:
@@ -327,10 +537,25 @@ def load_netsuite_stream(
     project.status = "data_loaded"
     db.commit()
 
+    save_working(project.id, primary_df, primary_df.copy())
+    for table_id in target_ids:
+        meta = table_meta_by_id[table_id]
+        if meta.get("role") == "primary":
+            continue
+        q = query_for_table(body.stream, table_id)
+        if q is None:
+            continue
+        try:
+            df_aux, _ = run_suiteql(creds, q, limit=body.row_limit)
+            save_table(project.id, table_id, df_aux)
+        except RuntimeError:
+            pass
+
     return {
         "ok": True,
         "stream": body.stream,
         "loaded": loaded,
+        "skipped": skipped,
         "primary_rows": int(len(primary_df)),
         "primary_columns": int(primary_df.shape[1]),
     }
